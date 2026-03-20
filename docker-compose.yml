@@ -1,21 +1,32 @@
 services:
-  swapdeck:
+  ignite:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: swapdeck
+    container_name: ignite
+    gpus: all
     ports:
       - "3000:3000"
     environment:
       SWAPDECK_DOCKER: "1"
       LLAMA_SWAP_URL: "http://llama-runtime:8090"
       LLMFIT_URL: "http://llmfit:8787"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:
       - ${SWAPDECK_MODELS_DIR:-./models}:/models
       - ${SWAPDECK_CONFIG_DIR:-./config}:/config
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - llama-runtime
       - llmfit
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   llama-runtime:
     build:

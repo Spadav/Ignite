@@ -17,4 +17,4 @@ EOF
   exit 1
 fi
 
-exec /usr/local/bin/llama-swap --config "$CONFIG_FILE" --listen "$LISTEN_ADDR"
+exec /usr/local/bin/llama-swap --config "$CONFIG_FILE" --watch-config --listen "$LISTEN_ADDR"

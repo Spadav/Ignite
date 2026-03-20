@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 
-const TEST_STATE_KEY = 'swapdeck_test_state_v1'
+const TEST_STATE_KEY = 'ignite_test_state_v1'
 
 function splitThinkingBlocks(text) {
   if (!text) return { answer: '', thinkingBlocks: [] }
@@ -19,6 +20,7 @@ function splitThinkingBlocks(text) {
 }
 
 function TestPage() {
+  const [searchParams] = useSearchParams()
   const [prompt, setPrompt] = useState('')
   const [model, setModel] = useState('')
   const [models, setModels] = useState({})
@@ -54,10 +56,15 @@ function TestPage() {
       .then(data => {
         setModels(data.models || {})
         const keys = Object.keys(data.models || {})
+        const requestedModel = (searchParams.get('model') || '').trim()
+        if (requestedModel && keys.includes(requestedModel)) {
+          setModel(requestedModel)
+          return
+        }
         if (keys.length > 0 && !model) setModel(keys[0])
       })
       .catch(() => {})
-  }, [])
+  }, [searchParams, model])
 
   useEffect(() => {
     const payload = {
@@ -105,6 +112,7 @@ function TestPage() {
         id: data.id,
         system_fingerprint: data.system_fingerprint,
         created: data.created,
+        request_mode: data.request_mode,
         usage: data.usage || {},
         timings: data.timings || {}
       })
@@ -116,6 +124,7 @@ function TestPage() {
   }
 
   const modelKeys = Object.keys(models)
+  const selectedModelMode = models[model]?.metadata?.igniteTemplateMode || 'chat'
   const { answer, thinkingBlocks } = splitThinkingBlocks(response)
   const reasoningText = reasoning.trim()
   const hasThinking = reasoningText.length > 0 || thinkingBlocks.length > 0
@@ -141,7 +150,24 @@ function TestPage() {
               </option>
             ))}
           </select>
+          {model && (
+            <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+              Request mode: {selectedModelMode === 'completion' ? 'Completion' : 'Chat'}
+            </p>
+          )}
         </div>
+
+        {model && selectedModelMode === 'completion' && (
+          <div
+            className="mb-4 rounded-lg border p-3 text-sm"
+            style={{ borderColor: 'rgba(245, 158, 11, 0.35)', background: 'rgba(245, 158, 11, 0.10)' }}
+          >
+            <p className="font-medium mb-1">Completion model</p>
+            <p style={{ color: 'var(--text-muted)' }}>
+              This model is better for code or text continuation than normal chat. Use a code prefix, unfinished function, or partial paragraph instead of a conversational prompt like "hi".
+            </p>
+          </div>
+        )}
 
         {/* Prompt */}
         <div>
@@ -149,7 +175,7 @@ function TestPage() {
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Enter your prompt here..."
+            placeholder={selectedModelMode === 'completion' ? 'Enter a completion prompt or code prefix...' : 'Enter your prompt here...'}
             rows={4}
             className="w-full px-3 py-2 rounded-lg border dark:border-gray-600 dark:bg-gray-700 resize-none"
           />
@@ -220,6 +246,7 @@ function TestPage() {
                 <div><span style={{ color: 'var(--text-muted)' }}>Predicted tokens:</span> {meta.timings.predicted_n ?? '-'}</div>
                 <div><span style={{ color: 'var(--text-muted)' }}>Predicted ms:</span> {meta.timings.predicted_ms ?? '-'}</div>
                 <div><span style={{ color: 'var(--text-muted)' }}>Tokens/sec:</span> {meta.timings.predicted_per_second ?? '-'}</div>
+                <div><span style={{ color: 'var(--text-muted)' }}>Request mode:</span> {meta.request_mode || selectedModelMode}</div>
                 <div><span style={{ color: 'var(--text-muted)' }}>ID:</span> {meta.id || '-'}</div>
                 <div><span style={{ color: 'var(--text-muted)' }}>Fingerprint:</span> {meta.system_fingerprint || '-'}</div>
                 <div><span style={{ color: 'var(--text-muted)' }}>Created:</span> {meta.created ?? '-'}</div>

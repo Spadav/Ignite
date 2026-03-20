@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 import yaml
 import requests
+import docker
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -50,7 +51,7 @@ NO_CACHE_HEADERS = {
     "Expires": "0",
 }
 IS_DOCKER = os.environ.get("SWAPDECK_DOCKER") == "1"
-FALLBACK_CONFIG_GUIDE = """SwapDeck Config Guide
+FALLBACK_CONFIG_GUIDE = """Ignite Config Guide
 
 Core fields:
 - models: dictionary of model definitions
@@ -92,6 +93,9 @@ DOCKER_DEFAULT_SETTINGS = {
 }
 
 DEFAULT_SETTINGS = DOCKER_DEFAULT_SETTINGS if IS_DOCKER else LOCAL_DEFAULT_SETTINGS
+DOCKER_SOCKET_PATH = "/var/run/docker.sock"
+DOCKER_RUNTIME_CONTAINER = os.environ.get("IGNITE_RUNTIME_CONTAINER", "llama-runtime")
+DOCKER_SUPPORT_CONTAINERS = [name for name in [os.environ.get("IGNITE_LLMFIT_CONTAINER", "llmfit")] if name]
 
 
 def is_docker_managed_runtime() -> bool:
@@ -100,6 +104,23 @@ def is_docker_managed_runtime() -> bool:
 
 def get_runtime_mode() -> str:
     return "docker" if is_docker_managed_runtime() else "local"
+
+
+def get_docker_client() -> Optional[docker.DockerClient]:
+    if not is_docker_managed_runtime():
+        return None
+    if not os.path.exists(DOCKER_SOCKET_PATH):
+        return None
+    try:
+        client = docker.DockerClient(base_url=f"unix://{DOCKER_SOCKET_PATH}")
+        client.ping()
+        return client
+    except Exception:
+        return None
+
+
+def can_manage_docker_runtime() -> bool:
+    return get_docker_client() is not None
 
 
 def get_llama_swap_executable() -> str:
@@ -244,9 +265,9 @@ def get_docker_gpu_preflight() -> Dict[str, Any]:
             "host_nvidia_smi": False,
             "gpu_ready": False,
             "state": "containerized",
-            "message": "Docker GPU preflight is only available from the host-side SwapDeck process.",
+            "message": "Docker GPU preflight is only available from the host-side Ignite process.",
             "details": [
-                "This SwapDeck instance is running inside Docker.",
+                "This Ignite instance is running inside Docker.",
                 "Use `docker run --rm --gpus all ... nvidia-smi -L` on the host to verify GPU passthrough.",
             ],
         }
@@ -287,7 +308,7 @@ def get_docker_gpu_preflight() -> Dict[str, Any]:
         info_text = (docker_info.stdout or "").strip()
     except Exception as e:
         preflight["state"] = "docker_unreachable"
-        preflight["message"] = "Docker is installed but not reachable from SwapDeck."
+        preflight["message"] = "Docker is installed but not reachable from Ignite."
         preflight["details"] = [str(e)]
         docker_gpu_preflight_cache.update({"checked_at": datetime.now(), "result": preflight})
         return preflight
@@ -370,13 +391,32 @@ def start_llama_swap() -> Dict[str, Any]:
             return {"running": True, "pid": get_llama_swap_pid()}
 
         if IS_DOCKER or os.environ.get("LLAMA_SWAP_URL"):
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "llama-swap is managed outside SwapDeck in Docker mode. "
-                    "Make sure the llama-runtime service is up."
-                ),
-            )
+            client = get_docker_client()
+            if client is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Docker runtime control is unavailable. Mount /var/run/docker.sock into the Ignite "
+                        "container to allow start/stop actions."
+                    ),
+                )
+
+            started = []
+            for container_name in [*DOCKER_SUPPORT_CONTAINERS, DOCKER_RUNTIME_CONTAINER]:
+                try:
+                    container = client.containers.get(container_name)
+                    if container.status != "running":
+                        container.start()
+                        started.append(container_name)
+                except docker.errors.NotFound:
+                    continue
+
+            return {
+                "running": is_llama_swap_running(),
+                "pid": None,
+                "message": "Docker runtime start requested",
+                "containers_started": started,
+            }
 
         swap_dir = os.path.expanduser(settings["llama_swap_dir"])
         swap_config = os.path.expanduser(settings["llama_swap_config"])
@@ -405,10 +445,22 @@ def stop_llama_swap() -> Dict[str, Any]:
     """Stop llama-swap and child processes in local mode."""
     try:
         if IS_DOCKER or os.environ.get("LLAMA_SWAP_URL"):
-            return {
-                "stopped": False,
-                "message": "llama-swap is Docker-managed in this mode. Stop the runtime container with Docker Compose.",
-            }
+            client = get_docker_client()
+            if client is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Docker runtime control is unavailable. Mount /var/run/docker.sock into the Ignite "
+                        "container to allow start/stop actions."
+                    ),
+                )
+            try:
+                container = client.containers.get(DOCKER_RUNTIME_CONTAINER)
+                if container.status == "running":
+                    container.stop(timeout=20)
+                return {"stopped": True, "message": "Docker runtime stopped"}
+            except docker.errors.NotFound:
+                return {"stopped": True, "message": "Docker runtime container not found"}
 
         llama_swap_bin = get_llama_swap_executable()
         # Kill llama-server first, then llama-swap
@@ -679,6 +731,48 @@ def get_llmfit_recommendations(use_case: str = "chat", limit: int = 6, runtime: 
         raise HTTPException(status_code=500, detail=f"Invalid llmfit response: {e}")
 
 
+def get_effective_hardware_profile() -> Dict[str, Any]:
+    if is_docker_managed_runtime():
+        try:
+            payload = get_llmfit_recommendations(use_case="chat", limit=1)
+            system = payload.get("system") or {}
+            gpu_name = system.get("gpu_name") if system.get("has_gpu") else None
+            gpu_vram_gb = system.get("gpu_vram_gb") if system.get("has_gpu") else 0
+            return {
+                "source": "llmfit",
+                "gpu_name": gpu_name,
+                "memory_total_gb": float(gpu_vram_gb or 0),
+                "available": bool(system.get("has_gpu")),
+                "backend": system.get("backend"),
+            }
+        except Exception:
+            pass
+
+    gpu = get_gpu_stats()
+    return {
+        "source": "local",
+        "gpu_name": None,
+        "memory_total_gb": float(gpu.get("memory_total_gb") or 0),
+        "available": bool(gpu.get("available")),
+        "backend": "local",
+    }
+
+
+def get_runtime_gpu_stats() -> Dict[str, Any]:
+    gpu = get_gpu_stats()
+    if gpu.get("available"):
+        return gpu
+
+    hardware = get_effective_hardware_profile()
+    return {
+        "memory_used_gb": 0,
+        "memory_total_gb": round(float(hardware.get("memory_total_gb") or 0), 1),
+        "temperature_c": 0,
+        "available": bool(hardware.get("available")),
+        "source": hardware.get("source"),
+    }
+
+
 def rename_model(old_name: str, new_name: str) -> Dict[str, Any]:
     """Rename a model file"""
     old_path = Path(os.path.expanduser(settings["gguf_directory"])) / old_name
@@ -703,6 +797,7 @@ class AddModelToConfigRequest(BaseModel):
     filename: str
     config_key: Optional[str] = None
     display_name: Optional[str] = None
+    preset_id: Optional[str] = None
 
 
 class TestPrompt(BaseModel):
@@ -715,7 +810,119 @@ def sanitize_model_id(value: str) -> str:
     return sanitized or f"Model-{int(datetime.now().timestamp())}"
 
 
-def build_generated_model_entry(filename: str, display_name: Optional[str] = None) -> Dict[str, Any]:
+def get_model_file_info(filename: str) -> Dict[str, Any]:
+    model_path = Path(os.path.expanduser(settings["gguf_directory"])) / filename
+    if not model_path.exists():
+        raise HTTPException(status_code=404, detail="Model file not found")
+
+    size_gib = round(model_path.stat().st_size / (1024 ** 3), 2)
+    lower_name = filename.lower()
+    family = "chat"
+    if any(token in lower_name for token in ["starcoder", "coder", "codegemma", "deepseek-coder"]):
+        family = "completion"
+    elif any(token in lower_name for token in ["instruct", "chat", "qwen", "llama", "mistral", "gemma"]):
+        family = "chat"
+
+    return {
+        "filename": filename,
+        "size_gib": size_gib,
+        "family": family,
+    }
+
+
+def build_launch_presets(filename: str) -> List[Dict[str, Any]]:
+    info = get_model_file_info(filename)
+    hardware = get_effective_hardware_profile()
+    vram_gib = hardware["memory_total_gb"] if hardware.get("available") else 0
+    can_quantize_kv = vram_gib > 0
+
+    if vram_gib >= 40:
+        balanced_ctx = 65536
+        long_ctx = 131072
+    elif vram_gib >= 24:
+        balanced_ctx = 32768
+        long_ctx = 65536
+    elif vram_gib >= 16:
+        balanced_ctx = 16384
+        long_ctx = 32768
+    else:
+        balanced_ctx = 8192
+        long_ctx = 16384
+
+    if info["size_gib"] > max(vram_gib - 2, 0) and vram_gib > 0:
+        balanced_ctx = min(balanced_ctx, 16384)
+        long_ctx = min(long_ctx, 32768)
+
+    safe_preset = {
+        "id": "safe",
+        "name": "Safe",
+        "summary": "Highest chance to load cleanly on limited VRAM.",
+        "why_use": "Use this first if you are unsure, or if larger context settings fail to load.",
+        "why_not": "Lower context length and less aggressive performance tuning.",
+        "context": min(8192, balanced_ctx),
+        "gpu_layers": 99 if vram_gib > 0 else 0,
+        "flash_attention": vram_gib > 0,
+        "kv_cache": {"k": "q8_0", "v": "q8_0"} if can_quantize_kv and info["size_gib"] <= 12 else None,
+        "batch": 512,
+        "ubatch": 256,
+        "template_mode": info["family"],
+    }
+
+    balanced_preset = {
+        "id": "balanced",
+        "name": "Balanced",
+        "summary": "Recommended default for most systems.",
+        "why_use": "Good tradeoff between speed, context length, and stability.",
+        "why_not": "May still be too aggressive for very large models on tight VRAM.",
+        "context": balanced_ctx,
+        "gpu_layers": 99 if vram_gib > 0 else 0,
+        "flash_attention": vram_gib > 0,
+        "kv_cache": {"k": "q8_0", "v": "q8_0"} if can_quantize_kv and balanced_ctx >= 16384 else None,
+        "batch": 1024 if vram_gib >= 16 else 512,
+        "ubatch": 512 if vram_gib >= 16 else 256,
+        "template_mode": info["family"],
+    }
+
+    long_context_preset = {
+        "id": "long-context",
+        "name": "Long Context",
+        "summary": "Pushes context length higher with safer KV choices.",
+        "why_use": "Use for long chats, larger documents, or repo-scale prompts.",
+        "why_not": "More likely to hit VRAM limits or reduce throughput.",
+        "context": long_ctx,
+        "gpu_layers": 99 if vram_gib > 0 else 0,
+        "flash_attention": vram_gib > 0,
+        "kv_cache": {"k": "q4_0", "v": "q4_0"} if can_quantize_kv else None,
+        "batch": 512,
+        "ubatch": 256,
+        "template_mode": info["family"],
+    }
+
+    presets = [safe_preset, balanced_preset, long_context_preset]
+    if vram_gib <= 0:
+        for preset in presets:
+            preset["summary"] = f"{preset['summary']} CPU-only mode."
+            preset["flash_attention"] = False
+            preset["kv_cache"] = None
+            preset["gpu_layers"] = 0
+            preset["batch"] = 256
+            preset["ubatch"] = 128
+
+    return presets
+
+
+def resolve_launch_preset(filename: str, preset_id: Optional[str]) -> Dict[str, Any]:
+    presets = build_launch_presets(filename)
+    if not preset_id:
+        return next((preset for preset in presets if preset["id"] == "balanced"), presets[0])
+    for preset in presets:
+        if preset["id"] == preset_id:
+            return preset
+    raise HTTPException(status_code=400, detail=f"Unknown preset: {preset_id}")
+
+
+def build_generated_model_entry(filename: str, display_name: Optional[str] = None, preset_id: Optional[str] = None) -> Dict[str, Any]:
+    preset = resolve_launch_preset(filename, preset_id)
     model_path = f"/models/{filename}" if is_docker_managed_runtime() else str(
         Path(os.path.expanduser(settings["gguf_directory"])) / filename
     )
@@ -724,18 +931,44 @@ def build_generated_model_entry(filename: str, display_name: Optional[str] = Non
         f"-m {model_path}",
         "--host 0.0.0.0" if is_docker_managed_runtime() else "--host 127.0.0.1",
         "--port ${PORT}",
-        "-ngl 99",
-        "-fa on",
-        "-c 4096",
+        f"-ngl {preset['gpu_layers']}",
+        "-fa on" if preset["flash_attention"] else "-fa off",
+        f"-c {preset['context']}",
+        f"-b {preset['batch']}",
+        f"-ub {preset['ubatch']}",
     ]
+    if preset.get("kv_cache"):
+        command_parts.append(f"--cache-type-k {preset['kv_cache']['k']}")
+        command_parts.append(f"--cache-type-v {preset['kv_cache']['v']}")
+
     return {
         "name": display_name or Path(filename).stem,
         "cmd": "\n".join(command_parts),
         "proxy": "http://127.0.0.1:${PORT}",
+        "metadata": {
+            "ignitePreset": preset["id"],
+            "igniteTemplateMode": preset["template_mode"],
+            "igniteContext": preset["context"],
+        },
     }
 
 
-def add_model_to_config(filename: str, model_id: Optional[str] = None, display_name: Optional[str] = None) -> Dict[str, Any]:
+def get_configured_model_mode(model_id: str) -> str:
+    if not model_id:
+        return "chat"
+
+    try:
+        config = get_config()
+    except Exception:
+        return "chat"
+
+    model_entry = (config.get("models") or {}).get(model_id) or {}
+    metadata = model_entry.get("metadata") or {}
+    template_mode = str(metadata.get("igniteTemplateMode") or "").strip().lower()
+    return "completion" if template_mode == "completion" else "chat"
+
+
+def add_model_to_config(filename: str, model_id: Optional[str] = None, display_name: Optional[str] = None, preset_id: Optional[str] = None) -> Dict[str, Any]:
     model_path = Path(os.path.expanduser(settings["gguf_directory"])) / filename
     if not model_path.exists():
         raise HTTPException(status_code=404, detail="Model file not found")
@@ -759,7 +992,8 @@ def add_model_to_config(filename: str, model_id: Optional[str] = None, display_n
     ):
         models.pop("ExampleModel", None)
 
-    models[final_model_id] = build_generated_model_entry(filename, display_name)
+    chosen_preset = resolve_launch_preset(filename, preset_id)
+    models[final_model_id] = build_generated_model_entry(filename, display_name, chosen_preset["id"])
 
     health_check = config.get("healthCheck")
     if not isinstance(health_check, dict) or not health_check.get("model") or health_check.get("model") == "ExampleModel":
@@ -773,6 +1007,7 @@ def add_model_to_config(filename: str, model_id: Optional[str] = None, display_n
         "saved": True,
         "model_id": final_model_id,
         "display_name": models[final_model_id]["name"],
+        "preset_id": chosen_preset["id"],
     }
 
 
@@ -814,6 +1049,20 @@ def api_rename_model(old_name: str, new_name: str):
     return rename_model(old_name, new_name)
 
 
+@app.get("/api/models/{filename}/presets")
+def api_model_presets(filename: str):
+    """Generate launch presets for a model based on detected hardware and file characteristics."""
+    hardware = get_effective_hardware_profile()
+    return {
+        "filename": filename,
+        "hardware": {
+            "gpu": hardware,
+            "runtime_mode": get_runtime_mode(),
+        },
+        "presets": build_launch_presets(filename),
+    }
+
+
 @app.get("/api/config")
 def api_get_config():
     """Get llama-swap configuration"""
@@ -852,6 +1101,7 @@ def api_add_model_to_config(request: AddModelToConfigRequest):
         filename=request.filename,
         model_id=request.config_key,
         display_name=request.display_name,
+        preset_id=request.preset_id,
     )
 
 
@@ -870,7 +1120,7 @@ def api_status():
     logger.info("API: /api/status called")
     running = is_llama_swap_running()
     pid = get_llama_swap_pid() if running else None
-    gpu_stats = get_gpu_stats()
+    gpu_stats = get_runtime_gpu_stats()
     docker_gpu = get_docker_gpu_preflight()
     
     logger.info(f"Status: running={running}, pid={pid}, gpu={gpu_stats}, docker_gpu={docker_gpu.get('state')}")
@@ -880,6 +1130,7 @@ def api_status():
         "pid": pid,
         "gpu": gpu_stats,
         "docker_gpu": docker_gpu,
+        "docker_control_available": can_manage_docker_runtime(),
         "runtime_mode": get_runtime_mode(),
         "config_path": settings["llama_swap_config"],
         "config_exists": Path(os.path.expanduser(settings["llama_swap_config"])).exists(),
@@ -962,16 +1213,28 @@ def api_test_prompt(prompt: TestPrompt):
     """Send a test prompt to the selected model via llama-swap OpenAI-compatible API"""
     import time
     try:
-        payload = {
-            "messages": [{"role": "user", "content": prompt.prompt}],
-            "max_tokens": 512,
-        }
+        request_mode = get_configured_model_mode(prompt.model)
+        endpoint = "/v1/chat/completions"
+        payload: Dict[str, Any]
+
+        if request_mode == "completion":
+            endpoint = "/v1/completions"
+            payload = {
+                "prompt": prompt.prompt,
+                "max_tokens": 512,
+            }
+        else:
+            payload = {
+                "messages": [{"role": "user", "content": prompt.prompt}],
+                "max_tokens": 512,
+            }
+
         if prompt.model:
             payload["model"] = prompt.model
 
         start = time.time()
         response = requests.post(
-            f"{get_llama_swap_base_url()}/v1/chat/completions",
+            f"{get_llama_swap_base_url()}{endpoint}",
             json=payload,
             timeout=120
         )
@@ -982,9 +1245,13 @@ def api_test_prompt(prompt: TestPrompt):
 
         result = response.json()
         choice = result.get("choices", [{}])[0]
-        message = choice.get("message", {})
-        content = message.get("content", "")
-        reasoning = message.get("reasoning_content", "")
+        if request_mode == "completion":
+            content = choice.get("text", "")
+            reasoning = ""
+        else:
+            message = choice.get("message", {})
+            content = message.get("content", "")
+            reasoning = message.get("reasoning_content", "")
         usage = result.get("usage", {})
         timings = result.get("timings", {})
         tokens = usage.get("completion_tokens", 0)
@@ -1002,6 +1269,7 @@ def api_test_prompt(prompt: TestPrompt):
             "created": result.get("created"),
             "system_fingerprint": result.get("system_fingerprint"),
             "finish_reason": choice.get("finish_reason"),
+            "request_mode": request_mode,
         }
     except HTTPException:
         raise

@@ -3,13 +3,14 @@ import { useServiceStatus } from '../hooks/useServiceStatus'
 import { useGpuStats } from '../hooks/useGpuStats'
 
 function StatusPage() {
-  const { running, pid, dockerGpu, runtimeMode, configExists, configPath, refreshStatus } = useServiceStatus(15000)
+  const { running, pid, dockerGpu, dockerControlAvailable, runtimeMode, configExists, configPath, refreshStatus } = useServiceStatus(15000)
   const gpuStats = useGpuStats(15000)
   const [proxyLogs, setProxyLogs] = useState([])
   const [upstreamLogs, setUpstreamLogs] = useState([])
   const [logTab, setLogTab] = useState('proxy')
   const [starting, setStarting] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [copiedField, setCopiedField] = useState('')
 
   useEffect(() => {
     const appendLog = (setter) => (event) => {
@@ -49,6 +50,9 @@ function StatusPage() {
         background: 'rgba(245, 158, 11, 0.10)'
       }
 
+  const startDisabled = (runtimeMode === 'docker' && !dockerControlAvailable) || running || starting
+  const stopDisabled = (runtimeMode === 'docker' && !dockerControlAvailable) || !running || stopping
+
   const handleStart = async () => {
     try {
       setStarting(true)
@@ -81,6 +85,20 @@ function StatusPage() {
     }
   }
 
+  const copyText = async (label, value) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopiedField(label)
+      setTimeout(() => setCopiedField(''), 1600)
+    } catch {
+      alert(`Copy failed. Value: ${value}`)
+    }
+  }
+
+  const apiBaseUrl = `${window.location.protocol}//${window.location.hostname}:8090/v1`
+  const modelsUrl = `${apiBaseUrl}/models`
+  const hasConfiguredModels = configExists
+
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
@@ -88,17 +106,21 @@ function StatusPage() {
         <div className="flex gap-2">
           <button
             onClick={handleStart}
-            disabled={runtimeMode === 'docker' || running || starting}
-            className="btn btn-primary"
+            disabled={startDisabled}
+            className={`btn ${startDisabled ? 'btn-secondary opacity-60 cursor-not-allowed' : 'btn-primary'}`}
           >
-            {runtimeMode === 'docker' ? 'Managed by Docker' : starting ? 'Starting...' : 'Start'}
+            {runtimeMode === 'docker'
+              ? starting ? 'Starting Runtime...' : 'Start Runtime'
+              : starting ? 'Starting...' : 'Start'}
           </button>
           <button
             onClick={handleStop}
-            disabled={runtimeMode === 'docker' || !running || stopping}
-            className="btn btn-danger"
+            disabled={stopDisabled}
+            className={`btn ${stopDisabled ? 'btn-secondary opacity-60 cursor-not-allowed' : 'btn-danger'}`}
           >
-            {runtimeMode === 'docker' ? 'Stop via Compose' : stopping ? 'Stopping...' : 'Stop'}
+            {runtimeMode === 'docker'
+              ? stopping ? 'Stopping Runtime...' : 'Stop Runtime'
+              : stopping ? 'Stopping...' : 'Stop'}
           </button>
         </div>
       </div>
@@ -135,12 +157,69 @@ function StatusPage() {
         <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
           {configPath || '-'}
         </p>
+        {runtimeMode === 'docker' && !dockerControlAvailable && (
+          <p className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>
+            Runtime start/stop buttons need Docker socket access inside the Ignite container.
+          </p>
+        )}
         {!configExists && (
           <p className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>
             Create or save a config before starting the runtime stack.
           </p>
         )}
       </div>
+
+      {running && (
+        <div className="card mb-6">
+          <h3 className="text-lg font-semibold mb-2">Connect Other Apps</h3>
+          <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+            Use this OpenAI-compatible API endpoint in other apps that support custom providers or local models.
+          </p>
+
+          <div className="space-y-3">
+            <div className="rounded-lg border p-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">Base URL</div>
+                  <div className="font-mono text-sm mt-1">{apiBaseUrl}</div>
+                </div>
+                <button onClick={() => copyText('base', apiBaseUrl)} className="btn btn-secondary text-sm">
+                  {copiedField === 'base' ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">Models URL</div>
+                  <div className="font-mono text-sm mt-1">{modelsUrl}</div>
+                </div>
+                <button onClick={() => copyText('models', modelsUrl)} className="btn btn-secondary text-sm">
+                  {copiedField === 'models' ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Quick checks</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+{`curl ${modelsUrl}
+
+curl ${apiBaseUrl}/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"YourModel","messages":[{"role":"user","content":"hi"}]}'`}
+              </div>
+            </div>
+
+            {!hasConfiguredModels && (
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                Runtime is up, but you still need at least one configured model before other apps can send useful requests.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       <div
         className="card mb-6"
@@ -158,7 +237,7 @@ function StatusPage() {
         </p>
         {dockerGpu?.state !== 'ready' && (
           <p className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>
-            SwapDeck can run in Docker, but GPU-backed llama.cpp containers need host-level NVIDIA Container Toolkit support.
+            Ignite runs in Docker, but GPU-backed llama.cpp containers need host-level NVIDIA Container Toolkit support.
           </p>
         )}
         {dockerGpu?.details?.length > 0 && (

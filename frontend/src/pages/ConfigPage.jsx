@@ -93,24 +93,48 @@ function ConfigPage() {
     }
   }
 
+  const saveStructuredConfig = async (nextConfig, successText = 'Config saved') => {
+    setSaving(true)
+    setMessage(null)
+
+    const response = await fetch('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(nextConfig)
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null)
+      throw new Error(errorData?.detail || 'Save failed')
+    }
+
+    setConfig(nextConfig)
+    await fetchConfig()
+    setMessage({ type: 'success', text: successText })
+  }
+
   const handleSave = async () => {
     try {
-      setSaving(true)
-      setMessage(null)
+      if (editorMode === 'raw') {
+        setSaving(true)
+        setMessage(null)
 
-      const response = await fetch(editorMode === 'raw' ? '/api/config/raw' : '/api/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editorMode === 'raw' ? { content: rawConfig } : config)
-      })
+        const response = await fetch('/api/config/raw', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: rawConfig })
+        })
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null)
-        throw new Error(errorData?.detail || 'Save failed')
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => null)
+          throw new Error(errorData?.detail || 'Save failed')
+        }
+
+        await fetchConfig()
+        setMessage({ type: 'success', text: 'Raw YAML saved' })
+      } else {
+        await saveStructuredConfig(config, 'Config saved')
       }
-
-      await fetchConfig()
-      setMessage({ type: 'success', text: editorMode === 'raw' ? 'Raw YAML saved' : 'Config saved' })
     } catch (error) {
       setMessage({ type: 'error', text: error.message || 'Failed to save config' })
     } finally {
@@ -176,13 +200,21 @@ function ConfigPage() {
     })
   }
 
-  const deleteModel = (modelKey) => {
-    setConfig(prev => {
-      const models = { ...prev.models }
+  const deleteModel = async (modelKey) => {
+    try {
+      const models = { ...config.models }
       delete models[modelKey]
-      return { ...prev, models }
-    })
-    setDeleteConfirm(null)
+      const nextConfig = { ...config, models }
+      if (nextConfig.healthCheck?.model === modelKey) {
+        nextConfig.healthCheck = { ...nextConfig.healthCheck, model: '' }
+      }
+      await saveStructuredConfig(nextConfig, `Removed ${modelKey} from config`)
+      setDeleteConfirm(null)
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message || 'Failed to delete model from config' })
+    } finally {
+      setSaving(false)
+    }
   }
 
   const addModel = () => {

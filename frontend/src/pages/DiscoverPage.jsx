@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 const USE_CASES = [
   { key: 'chat', label: 'Chat' },
@@ -10,7 +11,36 @@ function formatScore(value) {
   return Number(value).toFixed(1)
 }
 
+function extractRepoId(model) {
+  const sources = Array.isArray(model?.gguf_sources) ? model.gguf_sources : []
+
+  for (const source of sources) {
+    if (typeof source === 'string' && source.includes('/')) {
+      return source
+    }
+    if (source && typeof source === 'object') {
+      const candidates = [source.repo_id, source.repo, source.hf_repo, source.model]
+      for (const candidate of candidates) {
+        if (typeof candidate === 'string' && candidate.includes('/')) {
+          return candidate
+        }
+      }
+      if (typeof source.url === 'string') {
+        const match = source.url.match(/huggingface\.co\/([^/?#]+\/[^/?#]+)/i)
+        if (match) return match[1]
+      }
+    }
+  }
+
+  if (typeof model?.name === 'string' && model.name.includes('/')) {
+    return model.name
+  }
+
+  return null
+}
+
 function DiscoverPage() {
+  const navigate = useNavigate()
   const [useCase, setUseCase] = useState('chat')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -89,7 +119,9 @@ function DiscoverPage() {
               <p style={{ color: 'var(--text-muted)' }}>No recommendations returned.</p>
             </div>
           ) : (
-            models.map((model) => (
+            models.map((model) => {
+              const repoId = extractRepoId(model)
+              return (
               <div key={`${model.name}-${model.runtime}`} className="card">
                 <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
@@ -108,6 +140,23 @@ function DiscoverPage() {
                     <div><span style={{ color: 'var(--text-muted)' }}>Provider:</span> {model.provider || '-'}</div>
                   </div>
                 </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => repoId && navigate(`/models?repo=${encodeURIComponent(repoId)}`)}
+                    disabled={!repoId}
+                    className="btn btn-primary text-sm"
+                  >
+                    {repoId ? 'Find GGUF' : 'No GGUF Source'}
+                  </button>
+                  {repoId && (
+                    <button
+                      onClick={() => window.open(`https://huggingface.co/${repoId}`, '_blank', 'noopener,noreferrer')}
+                      className="btn btn-secondary text-sm"
+                    >
+                      Open Repo
+                    </button>
+                  )}
+                </div>
                 {Array.isArray(model.notes) && model.notes.length > 0 && (
                   <div className="mt-4 space-y-1 text-sm" style={{ color: 'var(--text-muted)' }}>
                     {model.notes.map((note, index) => (
@@ -116,7 +165,7 @@ function DiscoverPage() {
                   </div>
                 )}
               </div>
-            ))
+            )})
           )}
         </div>
       )}

@@ -1,170 +1,93 @@
-# SwapDeck
+# Ignite
 
-SwapDeck is a web-based control panel for managing local LLMs through [llama-swap](https://github.com/mostlygeek/llama-swap). Download GGUF models, edit llama-swap configuration, start/stop the service, monitor your GPU, and test models from a single dashboard.
+Ignite is a Docker-first local AI control panel built around `llama-swap`, `llama.cpp`, and `llmfit`.
 
-## Features
+It is designed for one clear path:
+- detect hardware
+- recommend models that fit
+- download GGUFs
+- generate runtime config
+- test the model from one UI
 
-- **Service Control** — Start/stop llama-swap from the UI; live status indicator in the sidebar
-- **Configuration Editor** — Edit llama-swap's `config.yaml` (models, commands, proxies, aliases, filters) with a structured form
-- **Model Management** — Browse installed `.gguf` files, download new ones from HuggingFace with a real-time progress bar, rename or delete models
-- **Quick Test** — Pick a model from the config, type a prompt, and see the response with token count and latency
-- **GPU Monitoring** — Real-time NVIDIA GPU memory and temperature in the header bar
-- **Settings** — Configure all paths and ports (GGUF directory, llama-swap location, ports) so nothing is hardcoded to one machine
-- **Dark Mode** — Toggle between light and dark themes
+## Stack
 
-## Prerequisites
+- `ignite`: React + FastAPI app on `:3000`
+- `llama-runtime`: `llama-swap` + `llama-server`
+- `llmfit`: hardware-aware model recommendations
 
-- Python 3.9+
-- Node.js 18+
-- [llama-swap](https://github.com/mostlygeek/llama-swap) installed somewhere on your system
-- NVIDIA GPU with `nvidia-smi` available (GPU stats degrade gracefully if missing)
-- Linux with GNOME Terminal (used to launch llama-swap in a visible window)
+## Requirements
+
+- Docker
+- Docker Compose
+- NVIDIA GPU
+- `nvidia-smi` working on the host
+- NVIDIA Container Toolkit configured so `docker run --gpus all ...` works
 
 ## Quick Start
 
-### 1. Clone and install
-
 ```bash
-# Backend
-cd backend
-pip install -r requirements.txt
-
-# Frontend
-cd ../frontend
-npm install
-```
-
-### 2. Configure paths
-
-Create `backend/settings.json` from the example file:
-
-```bash
-cp backend/settings.example.json backend/settings.json
-```
-
-Default contents:
-
-```json
-{
-  "gguf_directory": "~/models",
-  "llama_swap_dir": "~/llama-swap",
-  "llama_swap_config": "~/llama-swap/config.yaml",
-  "llama_swap_port": 8090,
-  "backend_port": 8091
-}
-```
-
-Edit this file directly, or use the **Settings** page in the UI after starting the app. All paths support `~` expansion.
-
-### 3. Run
-
-#### Option A: Backend only (recommended for normal use)
-
-Build frontend once:
-
-```bash
-cd frontend
-npm install
-npm run build
-```
-
-Start backend:
-
-```bash
-cd ../backend
-python main.py
+git clone <repo-url>
+cd ignite
+docker compose up -d --build
 ```
 
 Open:
 
-- `http://127.0.0.1:8091`
+- `http://127.0.0.1:3000`
 
-#### Option B: Dev mode (hot reload, two terminals)
+Stop:
 
 ```bash
-# Terminal 1 — backend
-cd backend
-python main.py
-# Starts on http://localhost:8091
-
-# Terminal 2 — frontend dev server
-cd frontend
-npm run dev
-# Opens at http://localhost:3000
+docker compose down
 ```
 
-The frontend dev server proxies `/api` requests to the backend automatically.
+## Default Folders
 
-## Architecture
+- `./models`
+- `./config`
 
+These are the default low-tech paths.
+
+Advanced users can override them:
+
+```bash
+SWAPDECK_MODELS_DIR=/path/to/models SWAPDECK_CONFIG_DIR=/path/to/config docker compose up -d --build
 ```
-frontend (React + Vite)        backend (FastAPI + Uvicorn)        llama-swap
-  :3000  ──── /api proxy ────>   :8091  ──── HTTP/process ────>    :8090
-                                   │
-                                   ├── settings.json  (user config)
-                                   └── ~/llama-swap/config.yaml  (llama-swap config)
-```
 
-### Pages
+## Pages
 
-| Page | Path | Purpose |
-|------|------|---------|
-| Status | `/status` | Start/stop llama-swap, view GPU stats and logs |
-| Config | `/config` | Edit llama-swap `config.yaml` — models, TTL, health checks |
-| Models | `/models` | List/download/rename/delete `.gguf` model files |
-| Test | `/test` | Send prompts to a running model via llama-swap's OpenAI-compatible API |
-| Settings | `/settings` | Configure paths and ports for this control panel |
+| Page | Purpose |
+|------|---------|
+| `Status` | Runtime health, logs, Docker GPU preflight |
+| `Discover` | `llmfit` recommendations for the current machine |
+| `Config` | Structured and raw YAML editing for `llama-swap` |
+| `Models` | Download, inspect, delete, and add GGUFs to config |
+| `Test` | Send prompts through the running runtime |
+| `Settings` | Show runtime settings and Docker-managed paths |
 
-### How Model Download Works
+## API
 
-Downloading a model is a two-phase REST + WebSocket flow:
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/api/status` | Runtime state, GPU stats, Docker preflight |
+| `GET` | `/api/discover/recommendations` | `llmfit` recommendation proxy |
+| `GET` | `/api/config` | Read runtime config |
+| `PUT` | `/api/config` | Save runtime config |
+| `GET` | `/api/config/raw` | Read raw YAML |
+| `PUT` | `/api/config/raw` | Save raw YAML |
+| `POST` | `/api/config/add-model` | Generate a model entry from a GGUF |
+| `GET` | `/api/models` | List installed GGUF files |
+| `POST` | `/api/models/download` | Start model download |
+| `POST` | `/api/test` | Send a chat request through `llama-swap` |
+| `GET` | `/health` | App health check |
 
-1. **Initiate** — Frontend POSTs to `/api/models/download` with a URL and filename. Backend registers a download task and returns a `task_id`.
-2. **Stream** — Frontend opens a WebSocket at `/ws/download/{task_id}`. Backend streams the file from the URL in 8KB chunks, saving it to the GGUF directory, and pushes `{progress, status}` messages over the WebSocket. The frontend renders a live progress bar. On completion, the model list refreshes automatically.
+## Security
 
-## API Reference
+- Ignite is for local or trusted-network use
+- there is no built-in auth layer
+- do not expose ports directly to the public internet
+- use Tailscale or another private overlay if remote access is needed
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/status` | Service running state + GPU stats |
-| POST | `/api/service/start` | Start llama-swap in a terminal window |
-| POST | `/api/service/stop` | Stop llama-swap and all child processes |
-| GET | `/api/logs?lines=N` | Recent llama-swap log lines |
-| GET | `/api/config` | Read llama-swap config.yaml |
-| PUT | `/api/config` | Write llama-swap config.yaml |
-| GET | `/api/models` | List `.gguf` files with size and date |
-| DELETE | `/api/models/{filename}` | Delete a model file |
-| PUT | `/api/models/{old_name}?new_name=X` | Rename a model file |
-| POST | `/api/models/download` | Start downloading a model (returns task_id) |
-| POST | `/api/test` | Send a chat prompt to llama-swap |
-| GET | `/api/settings` | Get current settings |
-| PUT | `/api/settings` | Update and persist settings |
-| GET | `/health` | Health check |
+## License
 
-### WebSocket
-
-| Endpoint | Description |
-|----------|-------------|
-| `ws://HOST:8091/ws/download/{task_id}` | Real-time download progress updates |
-
-## Settings Reference
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `gguf_directory` | `~/models` | Directory where `.gguf` model files are stored |
-| `llama_swap_dir` | `~/llama-swap` | llama-swap installation directory |
-| `llama_swap_config` | `~/llama-swap/config.yaml` | Path to llama-swap's config file |
-| `llama_swap_port` | `8090` | Port llama-swap listens on |
-| `backend_port` | `8091` | Port this control panel backend runs on (requires restart) |
-
-## Tech Stack
-
-- **Frontend**: React 18, React Router, Tailwind CSS, Vite
-- **Backend**: Python, FastAPI, Uvicorn, WebSockets
-- **Model server**: llama-swap (wraps llama.cpp's `llama-server`)
-
-## Security Notes
-
-- This project is designed for **local/trusted network use** and does **not** include authentication/authorization by default.
-- Do not expose backend (`8091`) or llama-swap (`8090`) directly to the public internet.
-- For remote access, prefer a private overlay network such as **Tailscale** instead of opening router/firewall ports.
+MIT

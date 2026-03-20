@@ -4,7 +4,7 @@ import { useGpuStats } from './hooks/useGpuStats'
 import { useServiceStatus } from './hooks/useServiceStatus'
 
 function App() {
-  const appName = 'SwapDeck'
+  const appName = 'Ignite'
   const navigate = useNavigate()
   const location = useLocation()
   const [darkMode, setDarkMode] = useState(false)
@@ -20,6 +20,7 @@ function App() {
   }, [darkMode])
 
   const menuItems = [
+    { label: 'Setup', path: '/setup' },
     { label: 'Status', path: '/status' },
     { label: 'Discover', path: '/discover' },
     { label: 'Config', path: '/config' },
