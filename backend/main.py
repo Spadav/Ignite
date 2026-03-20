@@ -1427,6 +1427,10 @@ def api_get_settings():
             "managed_runtime": is_docker_managed_runtime(),
             "config_exists": Path(os.path.expanduser(settings["llama_swap_config"])).exists(),
             "docker_control_warning": get_docker_control_warning(),
+            "docker_paths": {
+                "models_dir": os.environ.get("SWAPDECK_MODELS_DIR", "./models"),
+                "config_dir": os.environ.get("SWAPDECK_CONFIG_DIR", "./config"),
+            } if is_docker_managed_runtime() else None,
         },
     }
 

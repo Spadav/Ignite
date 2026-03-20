@@ -11,6 +11,8 @@ services:
       SWAPDECK_DOCKER: "1"
       LLAMA_SWAP_URL: "http://llama-runtime:8090"
       LLMFIT_URL: "http://llmfit:8787"
+      SWAPDECK_MODELS_DIR: "${SWAPDECK_MODELS_DIR:-./models}"
+      SWAPDECK_CONFIG_DIR: "${SWAPDECK_CONFIG_DIR:-./config}"
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:

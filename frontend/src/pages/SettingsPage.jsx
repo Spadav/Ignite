@@ -6,6 +6,7 @@ function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
+  const [copiedField, setCopiedField] = useState('')
 
   useEffect(() => {
     fetchSettings()
@@ -56,6 +57,16 @@ function SettingsPage() {
     setSettings(prev => ({ ...prev, [key]: value }))
   }
 
+  const copyText = async (label, value) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopiedField(label)
+      setTimeout(() => setCopiedField(''), 1600)
+    } catch {
+      setMessage({ type: 'error', text: `Copy failed. Value: ${value}` })
+    }
+  }
+
   if (loading) return <p className="p-6">Loading...</p>
   if (!settings) return <p className="p-6 text-red-500">Failed to load settings</p>
 
@@ -85,6 +96,49 @@ function SettingsPage() {
             Runtime paths and ports come from Docker Compose and container environment values in this mode.
             Edit the repo config and compose files instead of changing these fields here.
           </p>
+        </div>
+      )}
+
+      {meta?.managed_runtime && (
+        <div className="card mb-6">
+          <h3 className="text-lg font-semibold mb-3">Docker Paths</h3>
+          <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+            These are the host folders currently mounted into Ignite. To change them, set the variables below in a repo-root `.env` file or export them before running `./scripts/start.sh`, then restart the stack.
+          </p>
+
+          <div className="space-y-3">
+            <div className="rounded-lg border p-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">Model Folder</div>
+                  <div className="font-mono text-sm mt-1">{meta?.docker_paths?.models_dir || './models'}</div>
+                </div>
+                <button onClick={() => copyText('models-dir', meta?.docker_paths?.models_dir || './models')} className="btn btn-secondary text-sm">
+                  {copiedField === 'models-dir' ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">Config Folder</div>
+                  <div className="font-mono text-sm mt-1">{meta?.docker_paths?.config_dir || './config'}</div>
+                </div>
+                <button onClick={() => copyText('config-dir', meta?.docker_paths?.config_dir || './config')} className="btn btn-secondary text-sm">
+                  {copiedField === 'config-dir' ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Example `.env`</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+{`SWAPDECK_MODELS_DIR=/home/your-user/models
+SWAPDECK_CONFIG_DIR=/home/your-user/ignite-config`}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
