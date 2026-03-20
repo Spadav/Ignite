@@ -1,61 +1,23 @@
 healthCheck:
-  model: starcoder2-15b.IQ4_XS
+  model: ExampleModel
+
 globalTTL: 0
 startPort: 5800
+
 models:
-  starcoder2-15b.IQ4_XS:
-    name: starcoder2-15b.IQ4_XS
-    cmd: '/app/llama-server
-
-      -m /models/starcoder2-15b.IQ4_XS.gguf
-
+  ExampleModel:
+    name: Example Model
+    cmd: >
+      /app/llama-server
+      -m /models/REPLACE_WITH_MODEL.gguf
       --host 0.0.0.0
-
       --port ${PORT}
-
       -ngl 99
-
       -fa on
-
-      -c 8192
-
-      -b 512
-
-      -ub 256
-
-      --cache-type-k q8_0
-
-      --cache-type-v q8_0'
+      -c 4096
     proxy: http://127.0.0.1:${PORT}
     metadata:
-      ignitePreset: safe
-      igniteTemplateMode: completion
-      igniteContext: 8192
-  Qwen3.5-0.8B-UD-Q8_K_XL:
-    name: Qwen3.5-0.8B-UD-Q8_K_XL
-    cmd: '/app/llama-server
-
-      -m /models/Qwen3.5-0.8B-UD-Q8_K_XL.gguf
-
-      --host 0.0.0.0
-
-      --port ${PORT}
-
-      -ngl 99
-
-      -fa on
-
-      -c 8192
-
-      -b 512
-
-      -ub 256
-
-      --cache-type-k q8_0
-
-      --cache-type-v q8_0'
-    proxy: http://127.0.0.1:${PORT}
-    metadata:
-      ignitePreset: safe
+      ignitePreset: example
       igniteTemplateMode: chat
-      igniteContext: 8192
+      igniteRequestMode: chat
+      igniteContext: 4096

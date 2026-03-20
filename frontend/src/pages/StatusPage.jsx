@@ -3,7 +3,21 @@ import { useServiceStatus } from '../hooks/useServiceStatus'
 import { useGpuStats } from '../hooks/useGpuStats'
 
 function StatusPage() {
-  const { running, pid, dockerGpu, dockerControlAvailable, runtimeMode, configExists, configPath, refreshStatus } = useServiceStatus(15000)
+  const {
+    running,
+    pid,
+    dockerGpu,
+    dockerControlAvailable,
+    dockerControlWarning,
+    runtimeMode,
+    configExists,
+    configPath,
+    configuredModelCount,
+    configuredModelIds,
+    defaultModelId,
+    defaultModelMode,
+    refreshStatus
+  } = useServiceStatus(15000)
   const gpuStats = useGpuStats(15000)
   const [proxyLogs, setProxyLogs] = useState([])
   const [upstreamLogs, setUpstreamLogs] = useState([])
@@ -97,7 +111,15 @@ function StatusPage() {
 
   const apiBaseUrl = `${window.location.protocol}//${window.location.hostname}:8090/v1`
   const modelsUrl = `${apiBaseUrl}/models`
-  const hasConfiguredModels = configExists
+  const hasConfiguredModels = configuredModelCount > 0
+  const sampleModelId = defaultModelId || configuredModelIds[0] || 'YourModel'
+  const sampleRequest = defaultModelMode === 'completion'
+    ? `curl ${apiBaseUrl}/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"${sampleModelId}","prompt":"Write a short function that adds two numbers."}'`
+    : `curl ${apiBaseUrl}/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"${sampleModelId}","messages":[{"role":"user","content":"hi"}]}'`
 
   return (
     <div className="p-6">
@@ -162,6 +184,11 @@ function StatusPage() {
             Runtime start/stop buttons need Docker socket access inside the Ignite container.
           </p>
         )}
+        {dockerControlWarning && (
+          <p className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>
+            {dockerControlWarning}
+          </p>
+        )}
         {!configExists && (
           <p className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>
             Create or save a config before starting the runtime stack.
@@ -204,17 +231,25 @@ function StatusPage() {
             <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
               <div className="font-medium mb-2">Quick checks</div>
               <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
-{`curl ${modelsUrl}
+{hasConfiguredModels
+  ? `curl ${modelsUrl}
 
-curl ${apiBaseUrl}/chat/completions \\
-  -H "Content-Type: application/json" \\
-  -d '{"model":"YourModel","messages":[{"role":"user","content":"hi"}]}'`}
+${sampleRequest}`
+  : `curl ${modelsUrl}`}
               </div>
             </div>
 
             {!hasConfiguredModels && (
               <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
                 Runtime is up, but you still need at least one configured model before other apps can send useful requests.
+              </p>
+            )}
+            {hasConfiguredModels && (
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                Default example model: <span className="font-mono">{sampleModelId}</span>
+                {defaultModelMode === 'completion'
+                  ? ' using the completions endpoint.'
+                  : ' using the chat completions endpoint.'}
               </p>
             )}
           </div>

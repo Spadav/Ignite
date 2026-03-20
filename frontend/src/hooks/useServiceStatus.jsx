@@ -6,9 +6,14 @@ export function useServiceStatus(pollMs = 10000) {
     pid: null,
     dockerGpu: null,
     dockerControlAvailable: false,
+    dockerControlWarning: '',
     runtimeMode: 'local',
     configExists: false,
     configPath: '',
+    configuredModelCount: 0,
+    configuredModelIds: [],
+    defaultModelId: '',
+    defaultModelMode: 'chat',
   })
 
   const refreshStatus = async () => {
@@ -21,9 +26,14 @@ export function useServiceStatus(pollMs = 10000) {
           pid: data.pid,
           dockerGpu: data.docker_gpu || null,
           dockerControlAvailable: Boolean(data.docker_control_available),
+          dockerControlWarning: data.docker_control_warning || '',
           runtimeMode: data.runtime_mode || 'local',
           configExists: Boolean(data.config_exists),
           configPath: data.config_path || '',
+          configuredModelCount: Number(data.configured_model_count || 0),
+          configuredModelIds: Array.isArray(data.configured_model_ids) ? data.configured_model_ids : [],
+          defaultModelId: data.default_model_id || '',
+          defaultModelMode: data.default_model_mode || 'chat',
         })
     } catch (error) {
         setStatus({
@@ -31,9 +41,14 @@ export function useServiceStatus(pollMs = 10000) {
           pid: null,
           dockerGpu: null,
           dockerControlAvailable: false,
+          dockerControlWarning: '',
           runtimeMode: 'local',
           configExists: false,
           configPath: '',
+          configuredModelCount: 0,
+          configuredModelIds: [],
+          defaultModelId: '',
+          defaultModelMode: 'chat',
         })
     }
   }

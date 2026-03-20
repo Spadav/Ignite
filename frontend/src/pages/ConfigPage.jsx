@@ -192,6 +192,23 @@ function ConfigPage() {
     handleModelChange(modelKey, 'aliases', aliases.length > 0 ? aliases : undefined)
   }
 
+  const handleRequestModeChange = (modelKey, value) => {
+    setConfig(prev => ({
+      ...prev,
+      models: {
+        ...prev.models,
+        [modelKey]: {
+          ...prev.models[modelKey],
+          metadata: {
+            ...(prev.models[modelKey].metadata || {}),
+            igniteRequestMode: value,
+            igniteTemplateMode: value
+          }
+        }
+      }
+    }))
+  }
+
   const removeAliases = (modelKey) => {
     setConfig(prev => {
       const model = { ...prev.models[modelKey] }
@@ -441,6 +458,7 @@ function ConfigPage() {
             <div className="space-y-3">
               {Object.entries(config.models || {}).map(([key, model]) => {
                 const stripParamsValue = model.filters?.stripParams ?? model.filters?.strip_params ?? ''
+                const requestMode = model.metadata?.igniteRequestMode ?? model.metadata?.igniteTemplateMode ?? 'chat'
 
                 return (
                   <div key={key} className="card">
@@ -499,6 +517,21 @@ function ConfigPage() {
                             onChange={(e) => handleModelChange(key, 'proxy', e.target.value)}
                             className={`${inputClass} font-mono text-sm`}
                           />
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium mb-1">Request Mode</label>
+                          <select
+                            value={requestMode}
+                            onChange={(e) => handleRequestModeChange(key, e.target.value)}
+                            className={inputClass}
+                          >
+                            <option value="chat">Chat</option>
+                            <option value="completion">Completion</option>
+                          </select>
+                          <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                            Use Chat for instruct/conversation models. Use Completion for code or continuation models like StarCoder.
+                          </p>
                         </div>
 
                         {model.filters ? (

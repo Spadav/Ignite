@@ -96,6 +96,10 @@ DEFAULT_SETTINGS = DOCKER_DEFAULT_SETTINGS if IS_DOCKER else LOCAL_DEFAULT_SETTI
 DOCKER_SOCKET_PATH = "/var/run/docker.sock"
 DOCKER_RUNTIME_CONTAINER = os.environ.get("IGNITE_RUNTIME_CONTAINER", "llama-runtime")
 DOCKER_SUPPORT_CONTAINERS = [name for name in [os.environ.get("IGNITE_LLMFIT_CONTAINER", "llmfit")] if name]
+DOCKER_CONTROL_WARNING = (
+    "Ignite runtime controls use the host Docker socket. That gives this container control over "
+    "other Docker containers on this machine."
+)
 
 
 def is_docker_managed_runtime() -> bool:
@@ -121,6 +125,14 @@ def get_docker_client() -> Optional[docker.DockerClient]:
 
 def can_manage_docker_runtime() -> bool:
     return get_docker_client() is not None
+
+
+def get_docker_control_warning() -> Optional[str]:
+    if not is_docker_managed_runtime():
+        return None
+    if not can_manage_docker_runtime():
+        return None
+    return DOCKER_CONTROL_WARNING
 
 
 def get_llama_swap_executable() -> str:
@@ -384,6 +396,36 @@ def get_llama_swap_pid() -> Optional[int]:
         return None
 
 
+def infer_request_mode(*values: Optional[str]) -> str:
+    completion_tokens = [
+        "starcoder",
+        "codegemma",
+        "deepseek-coder",
+        "coder",
+        "completion",
+        "code",
+        "fim",
+    ]
+    chat_tokens = [
+        "instruct",
+        "chat",
+        "assistant",
+        "qwen",
+        "llama",
+        "mistral",
+        "gemma",
+        "--jinja",
+        "chat-template",
+    ]
+
+    normalized = " ".join(str(value or "").lower() for value in values if value)
+    if any(token in normalized for token in chat_tokens):
+        return "chat"
+    if any(token in normalized for token in completion_tokens):
+        return "completion"
+    return "chat"
+
+
 def start_llama_swap() -> Dict[str, Any]:
     """Start llama-swap service locally or validate the Docker-managed runtime."""
     try:
@@ -402,14 +444,26 @@ def start_llama_swap() -> Dict[str, Any]:
                 )
 
             started = []
+            runtime_found = False
             for container_name in [*DOCKER_SUPPORT_CONTAINERS, DOCKER_RUNTIME_CONTAINER]:
                 try:
                     container = client.containers.get(container_name)
+                    if container_name == DOCKER_RUNTIME_CONTAINER:
+                        runtime_found = True
                     if container.status != "running":
                         container.start()
                         started.append(container_name)
                 except docker.errors.NotFound:
                     continue
+
+            if not runtime_found:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"Docker runtime container '{DOCKER_RUNTIME_CONTAINER}' was not found. "
+                        "Check the compose stack before using runtime controls."
+                    ),
+                )
 
             return {
                 "running": is_llama_swap_running(),
@@ -437,6 +491,8 @@ def start_llama_swap() -> Dict[str, Any]:
         Path(LLAMA_SWAP_PROCESS_FILE).write_text(f"{process.pid}\n")
 
         return {"running": True, "pid": process.pid, "message": "llama-swap started"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start llama-swap: {str(e)}")
 
@@ -460,7 +516,13 @@ def stop_llama_swap() -> Dict[str, Any]:
                     container.stop(timeout=20)
                 return {"stopped": True, "message": "Docker runtime stopped"}
             except docker.errors.NotFound:
-                return {"stopped": True, "message": "Docker runtime container not found"}
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"Docker runtime container '{DOCKER_RUNTIME_CONTAINER}' was not found. "
+                        "Check the compose stack before using runtime controls."
+                    ),
+                )
 
         llama_swap_bin = get_llama_swap_executable()
         # Kill llama-server first, then llama-swap
@@ -484,6 +546,8 @@ def stop_llama_swap() -> Dict[str, Any]:
         if os.path.exists(LLAMA_SWAP_PROCESS_FILE):
             os.remove(LLAMA_SWAP_PROCESS_FILE)
         return {"stopped": True}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to stop llama-swap: {str(e)}")
 
@@ -816,12 +880,7 @@ def get_model_file_info(filename: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Model file not found")
 
     size_gib = round(model_path.stat().st_size / (1024 ** 3), 2)
-    lower_name = filename.lower()
-    family = "chat"
-    if any(token in lower_name for token in ["starcoder", "coder", "codegemma", "deepseek-coder"]):
-        family = "completion"
-    elif any(token in lower_name for token in ["instruct", "chat", "qwen", "llama", "mistral", "gemma"]):
-        family = "chat"
+    family = infer_request_mode(filename)
 
     return {
         "filename": filename,
@@ -948,6 +1007,7 @@ def build_generated_model_entry(filename: str, display_name: Optional[str] = Non
         "metadata": {
             "ignitePreset": preset["id"],
             "igniteTemplateMode": preset["template_mode"],
+            "igniteRequestMode": preset["template_mode"],
             "igniteContext": preset["context"],
         },
     }
@@ -964,8 +1024,44 @@ def get_configured_model_mode(model_id: str) -> str:
 
     model_entry = (config.get("models") or {}).get(model_id) or {}
     metadata = model_entry.get("metadata") or {}
-    template_mode = str(metadata.get("igniteTemplateMode") or "").strip().lower()
-    return "completion" if template_mode == "completion" else "chat"
+    explicit_mode = str(metadata.get("igniteRequestMode") or metadata.get("igniteTemplateMode") or "").strip().lower()
+    if explicit_mode in {"chat", "completion"}:
+        return explicit_mode
+
+    return infer_request_mode(
+        model_id,
+        model_entry.get("name"),
+        model_entry.get("useModelName"),
+        model_entry.get("cmd"),
+        " ".join(model_entry.get("aliases") or []),
+    )
+
+
+def get_config_summary() -> Dict[str, Any]:
+    try:
+        config = get_config()
+    except Exception:
+        return {
+            "configured_model_count": 0,
+            "configured_model_ids": [],
+            "default_model_id": "",
+            "default_model_mode": "chat",
+        }
+
+    models = config.get("models") or {}
+    model_ids = list(models.keys())
+    default_model_id = str((config.get("healthCheck") or {}).get("model") or "").strip()
+    if default_model_id not in models:
+        default_model_id = model_ids[0] if model_ids else ""
+
+    default_model_mode = get_configured_model_mode(default_model_id) if default_model_id else "chat"
+
+    return {
+        "configured_model_count": len(model_ids),
+        "configured_model_ids": model_ids,
+        "default_model_id": default_model_id,
+        "default_model_mode": default_model_mode,
+    }
 
 
 def add_model_to_config(filename: str, model_id: Optional[str] = None, display_name: Optional[str] = None, preset_id: Optional[str] = None) -> Dict[str, Any]:
@@ -1122,6 +1218,7 @@ def api_status():
     pid = get_llama_swap_pid() if running else None
     gpu_stats = get_runtime_gpu_stats()
     docker_gpu = get_docker_gpu_preflight()
+    config_summary = get_config_summary()
     
     logger.info(f"Status: running={running}, pid={pid}, gpu={gpu_stats}, docker_gpu={docker_gpu.get('state')}")
     
@@ -1131,9 +1228,11 @@ def api_status():
         "gpu": gpu_stats,
         "docker_gpu": docker_gpu,
         "docker_control_available": can_manage_docker_runtime(),
+        "docker_control_warning": get_docker_control_warning(),
         "runtime_mode": get_runtime_mode(),
         "config_path": settings["llama_swap_config"],
         "config_exists": Path(os.path.expanduser(settings["llama_swap_config"])).exists(),
+        **config_summary,
     }
 
 
@@ -1327,6 +1426,7 @@ def api_get_settings():
             "runtime_mode": get_runtime_mode(),
             "managed_runtime": is_docker_managed_runtime(),
             "config_exists": Path(os.path.expanduser(settings["llama_swap_config"])).exists(),
+            "docker_control_warning": get_docker_control_warning(),
         },
     }
 

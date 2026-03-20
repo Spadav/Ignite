@@ -5,27 +5,32 @@
 :root {
   --font-ui: "Space Grotesk", "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "SFMono-Regular", "Menlo", monospace;
-  --bg-app: #f4f6fb;
-  --bg-card: #ffffff;
-  --text-main: #0f172a;
-  --text-muted: #64748b;
-  --line-soft: #e2e8f0;
-  --brand: #0f766e;
+  --bg-app: #f4f0e6;
+  --bg-card: #fffdf8;
+  --text-main: #17211c;
+  --text-muted: #66736c;
+  --line-soft: #ddd5c5;
+  --brand: #c0562b;
+  --brand-soft: rgba(192, 86, 43, 0.10);
 }
 
 html.dark {
-  --bg-app: #090b11;
-  --bg-card: #121722;
-  --text-main: #e2e8f0;
-  --text-muted: #94a3b8;
-  --line-soft: #293242;
-  --brand: #2dd4bf;
+  --bg-app: #0d1110;
+  --bg-card: #151b18;
+  --text-main: #edf2ee;
+  --text-muted: #94a29a;
+  --line-soft: #2b3531;
+  --brand: #ff8b5c;
+  --brand-soft: rgba(255, 139, 92, 0.12);
 }
 
 @layer base {
   body {
     font-family: var(--font-ui);
     @apply bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100;
+    background-image:
+      radial-gradient(circle at top left, rgba(192, 86, 43, 0.08), transparent 28%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.20), transparent 35%);
   }
 
   code, pre {
@@ -35,7 +40,7 @@ html.dark {
 
 @layer components {
   .btn {
-    @apply px-4 py-2 rounded-lg font-medium transition-colors duration-200;
+    @apply px-4 py-2 rounded-xl font-medium transition-colors duration-200;
   }
   
   .btn-primary {
@@ -48,7 +53,8 @@ html.dark {
   }
   
   .btn-secondary {
-    @apply bg-gray-200 text-gray-800 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600;
+    background: rgba(148, 163, 184, 0.10);
+    color: var(--text-main);
   }
   
   .btn-danger {
@@ -56,26 +62,38 @@ html.dark {
   }
   
   .card {
-    @apply rounded-xl shadow-sm p-4;
+    @apply rounded-2xl shadow-sm p-5;
     background-color: var(--bg-card);
     border: 1px solid var(--line-soft);
+    box-shadow: 0 12px 34px rgba(15, 23, 42, 0.05);
+  }
+
+  .shell-panel {
+    box-shadow: 0 18px 38px rgba(15, 23, 42, 0.06);
+  }
+
+  .shell-chip {
+    @apply flex items-center gap-2 px-3 py-2 rounded-xl border;
+    border-color: var(--line-soft);
+    background: rgba(255, 255, 255, 0.35);
   }
 
   .shell-nav-item {
-    @apply w-full flex items-center justify-between px-4 py-2.5 rounded-lg transition-colors;
+    @apply w-full flex items-center justify-between px-4 py-3 rounded-xl transition-colors;
     color: var(--text-main);
   }
 
   .shell-nav-item:hover {
-    background: rgba(15, 118, 110, 0.08);
+    background: var(--brand-soft);
   }
 
   .shell-nav-item.active {
-    background: rgba(15, 118, 110, 0.16);
+    background: var(--brand-soft);
+    box-shadow: inset 3px 0 0 var(--brand);
   }
 
   .shell-nav-dot {
-    @apply inline-block h-2.5 w-2.5 rounded-full;
+    @apply inline-block h-2 w-2 rounded-full;
     background: var(--line-soft);
   }
 

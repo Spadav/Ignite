@@ -13,8 +13,12 @@ config.example.yaml
 .env
 *.log
 *.pid
-scripts/
 assets/
+!frontend/src/assets/
+!frontend/src/assets/Ignite_logo.jpeg
+/Ignite_logo.jpeg
+models/*
+!models/.gitkeep
 
 # OS/editor
 .DS_Store

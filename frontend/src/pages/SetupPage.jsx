@@ -66,32 +66,42 @@ function SetupPage() {
   const [startingRuntime, setStartingRuntime] = useState(false)
   const [stoppingRuntime, setStoppingRuntime] = useState(false)
 
+  const loadSetupData = async () => {
+    const [statusRes, discoverRes, configRes, modelsRes] = await Promise.all([
+      fetch('/api/status'),
+      fetch(`/api/discover/recommendations?use_case=${encodeURIComponent(useCase)}&limit=3`),
+      fetch('/api/config'),
+      fetch('/api/models'),
+    ])
+
+    const statusData = await statusRes.json().catch(() => ({}))
+    const discoverData = await discoverRes.json().catch(() => ({}))
+    const configData = await configRes.json().catch(() => ({}))
+    const modelsData = await modelsRes.json().catch(() => ([]))
+
+    if (!statusRes.ok) throw new Error(statusData.detail || 'Failed to load runtime status')
+    if (!discoverRes.ok) throw new Error(discoverData.detail || 'Failed to load recommendations')
+    if (!configRes.ok) throw new Error(configData.detail || 'Failed to load config')
+    if (!modelsRes.ok) throw new Error('Failed to load installed models')
+
+    return {
+      statusData,
+      discoverData,
+      configData,
+      modelsData: Array.isArray(modelsData) ? modelsData : [],
+    }
+  }
+
   useEffect(() => {
     const load = async () => {
       try {
         setLoading(true)
         setError('')
-        const [statusRes, discoverRes, configRes, modelsRes] = await Promise.all([
-          fetch('/api/status'),
-          fetch(`/api/discover/recommendations?use_case=${encodeURIComponent(useCase)}&limit=3`),
-          fetch('/api/config'),
-          fetch('/api/models'),
-        ])
-
-        const statusData = await statusRes.json().catch(() => ({}))
-        const discoverData = await discoverRes.json().catch(() => ({}))
-        const configData = await configRes.json().catch(() => ({}))
-        const modelsData = await modelsRes.json().catch(() => ([]))
-
-        if (!statusRes.ok) throw new Error(statusData.detail || 'Failed to load runtime status')
-        if (!discoverRes.ok) throw new Error(discoverData.detail || 'Failed to load recommendations')
-        if (!configRes.ok) throw new Error(configData.detail || 'Failed to load config')
-        if (!modelsRes.ok) throw new Error('Failed to load installed models')
-
+        const { statusData, discoverData, configData, modelsData } = await loadSetupData()
         setStatus(statusData)
         setDiscover(discoverData)
         setConfig(configData)
-        setInstalledModels(Array.isArray(modelsData) ? modelsData : [])
+        setInstalledModels(modelsData)
         setLastTestState(getLastTestState())
       } catch (err) {
         setError(err.message || 'Failed to load setup data')
@@ -136,7 +146,7 @@ function SetupPage() {
         : topModel
           ? `Top ${useCase} suggestion: ${topModel.name}`
           : 'Choose a recommendation for your hardware.',
-      action: () => topRepoId && navigate(`/models?repo=${encodeURIComponent(topRepoId)}`),
+      action: () => topRepoId ? navigate(`/models?repo=${encodeURIComponent(topRepoId)}`) : navigate('/discover'),
       actionLabel: topRepoId ? 'Find GGUF' : 'Open Discover',
     },
     {
@@ -162,27 +172,11 @@ function SetupPage() {
   const refreshSetup = async () => {
     setLoading(true)
     try {
-      const [statusRes, discoverRes, configRes, modelsRes] = await Promise.all([
-        fetch('/api/status'),
-        fetch(`/api/discover/recommendations?use_case=${encodeURIComponent(useCase)}&limit=3`),
-        fetch('/api/config'),
-        fetch('/api/models'),
-      ])
-
-      const statusData = await statusRes.json().catch(() => ({}))
-      const discoverData = await discoverRes.json().catch(() => ({}))
-      const configData = await configRes.json().catch(() => ({}))
-      const modelsData = await modelsRes.json().catch(() => ([]))
-
-      if (!statusRes.ok) throw new Error(statusData.detail || 'Failed to load runtime status')
-      if (!discoverRes.ok) throw new Error(discoverData.detail || 'Failed to load recommendations')
-      if (!configRes.ok) throw new Error(configData.detail || 'Failed to load config')
-      if (!modelsRes.ok) throw new Error('Failed to load installed models')
-
+      const { statusData, discoverData, configData, modelsData } = await loadSetupData()
       setStatus(statusData)
       setDiscover(discoverData)
       setConfig(configData)
-      setInstalledModels(Array.isArray(modelsData) ? modelsData : [])
+      setInstalledModels(modelsData)
       setLastTestState(getLastTestState())
       setError('')
     } catch (err) {
@@ -361,13 +355,16 @@ function SetupPage() {
 
             <div className="card">
               <h3 className="text-lg font-semibold mb-3">Detected Hardware</h3>
-              <div className="space-y-2 text-sm">
-                <div><span style={{ color: 'var(--text-muted)' }}>GPU:</span> {discover?.system?.has_gpu ? `${discover.system.gpu_name} (${discover.system.gpu_vram_gb} GiB)` : 'No GPU detected'}</div>
-                <div><span style={{ color: 'var(--text-muted)' }}>RAM:</span> {discover?.system?.available_ram_gb} / {discover?.system?.total_ram_gb} GiB free</div>
-                <div><span style={{ color: 'var(--text-muted)' }}>Backend:</span> {discover?.system?.backend || '-'}</div>
-                <div><span style={{ color: 'var(--text-muted)' }}>Runtime:</span> {status?.runtime_mode || '-'}</div>
+                <div className="space-y-2 text-sm">
+                  <div><span style={{ color: 'var(--text-muted)' }}>GPU:</span> {discover?.system?.has_gpu ? `${discover.system.gpu_name} (${discover.system.gpu_vram_gb} GiB)` : 'No GPU detected'}</div>
+                  <div><span style={{ color: 'var(--text-muted)' }}>RAM:</span> {discover?.system?.available_ram_gb} / {discover?.system?.total_ram_gb} GiB free</div>
+                  <div><span style={{ color: 'var(--text-muted)' }}>Backend:</span> {discover?.system?.backend || '-'}</div>
+                  <div><span style={{ color: 'var(--text-muted)' }}>Runtime:</span> {status?.runtime_mode || '-'}</div>
+                  {status?.docker_control_warning && (
+                    <div><span style={{ color: 'var(--text-muted)' }}>Docker control:</span> {status.docker_control_warning}</div>
+                  )}
+                </div>
               </div>
-            </div>
 
             <div className="card">
               <h3 className="text-lg font-semibold mb-3">Recommended Next Model</h3>
