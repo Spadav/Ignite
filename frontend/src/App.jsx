@@ -21,6 +21,7 @@ function App() {
 
   const menuItems = [
     { label: 'Status', path: '/status' },
+    { label: 'Discover', path: '/discover' },
     { label: 'Config', path: '/config' },
     { label: 'Models', path: '/models' },
     { label: 'Test', path: '/test' },

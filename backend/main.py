@@ -135,6 +135,15 @@ def get_llama_swap_base_url() -> str:
     return f"http://127.0.0.1:{settings['llama_swap_port']}"
 
 
+def get_llmfit_base_url() -> Optional[str]:
+    configured = os.environ.get("LLMFIT_URL", "").strip()
+    if configured:
+        return configured.rstrip("/")
+    if IS_DOCKER:
+        return "http://llmfit:8787"
+    return None
+
+
 def load_settings() -> Dict[str, Any]:
     """Load settings from settings.json, falling back to defaults if missing."""
     settings = dict(DEFAULT_SETTINGS)
@@ -639,6 +648,37 @@ def get_config_guide() -> str:
         raise HTTPException(status_code=500, detail=f"Error loading config guide: {str(e)}")
 
 
+def get_llmfit_recommendations(use_case: str = "chat", limit: int = 6, runtime: str = "llamacpp") -> Dict[str, Any]:
+    base_url = get_llmfit_base_url()
+    if not base_url:
+        raise HTTPException(
+            status_code=503,
+            detail="llmfit is not configured. Set LLMFIT_URL or run the Docker Compose stack with the llmfit service.",
+        )
+
+    try:
+        response = requests.get(
+            f"{base_url}/api/v1/models/top",
+            params={
+                "limit": max(1, min(limit, 12)),
+                "min_fit": "good",
+                "runtime": runtime,
+                "use_case": use_case,
+            },
+            timeout=20,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Failed to reach llmfit: {e}")
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail=response.text)
+
+    try:
+        return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Invalid llmfit response: {e}")
+
+
 def rename_model(old_name: str, new_name: str) -> Dict[str, Any]:
     """Rename a model file"""
     old_path = Path(os.path.expanduser(settings["gguf_directory"])) / old_name
@@ -813,6 +853,15 @@ def api_add_model_to_config(request: AddModelToConfigRequest):
         model_id=request.config_key,
         display_name=request.display_name,
     )
+
+
+@app.get("/api/discover/recommendations")
+def api_discover_recommendations(
+    use_case: str = Query("chat", description="Recommendation profile such as chat or coding"),
+    limit: int = Query(6, ge=1, le=12),
+):
+    """Proxy llmfit recommendations for the current machine."""
+    return get_llmfit_recommendations(use_case=use_case, limit=limit)
 
 
 @app.get("/api/status")
