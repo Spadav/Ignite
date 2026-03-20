@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_DIR="${SWAPDECK_CONFIG_DIR:-$ROOT_DIR/config}"
 MODELS_DIR="${SWAPDECK_MODELS_DIR:-$ROOT_DIR/models}"
+IGNITE_PORT="${IGNITE_PORT:-3000}"
+LLAMA_SWAP_PORT="${LLAMA_SWAP_PORT:-8090}"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 
 print_step() {
@@ -54,4 +56,6 @@ print_paths() {
   printf 'Project: %s\n' "$ROOT_DIR"
   printf 'Config:  %s\n' "$CONFIG_DIR"
   printf 'Models:  %s\n' "$MODELS_DIR"
+  printf 'UI Port:  %s\n' "$IGNITE_PORT"
+  printf 'API Port: %s\n' "$LLAMA_SWAP_PORT"
 }

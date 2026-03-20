@@ -10,6 +10,8 @@ function StatusPage() {
     dockerControlAvailable,
     dockerControlWarning,
     runtimeMode,
+    backendPort,
+    llamaSwapPort,
     configExists,
     configPath,
     configuredModelCount,
@@ -109,7 +111,7 @@ function StatusPage() {
     }
   }
 
-  const apiBaseUrl = `${window.location.protocol}//${window.location.hostname}:8090/v1`
+  const apiBaseUrl = `${window.location.protocol}//${window.location.hostname}:${llamaSwapPort}/v1`
   const modelsUrl = `${apiBaseUrl}/models`
   const hasConfiguredModels = configuredModelCount > 0
   const sampleModelId = defaultModelId || configuredModelIds[0] || 'YourModel'

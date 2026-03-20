@@ -20,4 +20,4 @@ fi
 
 print_step "4/4" "Ignite is ready to start"
 printf 'Run: ./scripts/start.sh\n'
-printf 'Then open: http://127.0.0.1:3000\n'
+printf 'Then open: http://127.0.0.1:%s\n' "$IGNITE_PORT"

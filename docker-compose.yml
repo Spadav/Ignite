@@ -6,13 +6,15 @@ services:
     container_name: ignite
     gpus: all
     ports:
-      - "3000:3000"
+      - "${IGNITE_PORT:-3000}:3000"
     environment:
       SWAPDECK_DOCKER: "1"
       LLAMA_SWAP_URL: "http://llama-runtime:8090"
       LLMFIT_URL: "http://llmfit:8787"
       SWAPDECK_MODELS_DIR: "${SWAPDECK_MODELS_DIR:-./models}"
       SWAPDECK_CONFIG_DIR: "${SWAPDECK_CONFIG_DIR:-./config}"
+      IGNITE_PORT: "${IGNITE_PORT:-3000}"
+      LLAMA_SWAP_PORT: "${LLAMA_SWAP_PORT:-8090}"
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:
@@ -37,7 +39,7 @@ services:
     container_name: llama-runtime
     gpus: all
     ports:
-      - "8090:8090"
+      - "${LLAMA_SWAP_PORT:-8090}:8090"
     volumes:
       - ${SWAPDECK_MODELS_DIR:-./models}:/models
       - ${SWAPDECK_CONFIG_DIR:-./config}:/config

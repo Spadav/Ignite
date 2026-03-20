@@ -84,12 +84,15 @@ LOCAL_DEFAULT_SETTINGS = {
     "backend_port": 8091,
 }
 
+DOCKER_IGNITE_PORT = int(os.environ.get("IGNITE_PORT", "3000"))
+DOCKER_LLAMA_SWAP_PORT = int(os.environ.get("LLAMA_SWAP_PORT", "8090"))
+
 DOCKER_DEFAULT_SETTINGS = {
     "gguf_directory": "/models",
     "llama_swap_dir": "/runtime",
     "llama_swap_config": "/config/config.yaml",
-    "llama_swap_port": 8090,
-    "backend_port": 3000,
+    "llama_swap_port": DOCKER_LLAMA_SWAP_PORT,
+    "backend_port": DOCKER_IGNITE_PORT,
 }
 
 DEFAULT_SETTINGS = DOCKER_DEFAULT_SETTINGS if IS_DOCKER else LOCAL_DEFAULT_SETTINGS
@@ -1230,6 +1233,8 @@ def api_status():
         "docker_control_available": can_manage_docker_runtime(),
         "docker_control_warning": get_docker_control_warning(),
         "runtime_mode": get_runtime_mode(),
+        "backend_port": settings["backend_port"],
+        "llama_swap_port": settings["llama_swap_port"],
         "config_path": settings["llama_swap_config"],
         "config_exists": Path(os.path.expanduser(settings["llama_swap_config"])).exists(),
         **config_summary,

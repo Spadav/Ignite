@@ -15,5 +15,6 @@ print_step "3/3" "Starting Ignite"
   docker_compose up -d --build
 )
 
-printf '\nIgnite UI: http://127.0.0.1:3000\n'
+printf 'llama-swap API: http://127.0.0.1:%s/v1\n' "$LLAMA_SWAP_PORT"
+printf 'Ignite UI: http://127.0.0.1:%s\n' "$IGNITE_PORT"
 printf 'Stop later with: ./scripts/stop.sh\n'

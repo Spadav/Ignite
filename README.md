@@ -60,7 +60,7 @@ What `install.sh` does:
 
 Then open:
 
-- `http://127.0.0.1:3000`
+- `http://127.0.0.1:<IGNITE_PORT>` (default: `3000`)
 
 What `start.sh` does:
 - checks Docker
@@ -72,6 +72,15 @@ If you prefer to avoid helper scripts, you can start Ignite manually:
 ```bash
 docker compose up -d --build
 ```
+
+You can also override the published ports through `.env`:
+
+```bash
+IGNITE_PORT=3000
+LLAMA_SWAP_PORT=8090
+```
+
+After changing ports, restart Ignite.
 
 ## Stop
 
@@ -103,6 +112,15 @@ Advanced users can override them:
 
 ```bash
 SWAPDECK_MODELS_DIR=/path/to/models SWAPDECK_CONFIG_DIR=/path/to/config ./scripts/start.sh
+```
+
+With port overrides:
+
+```bash
+SWAPDECK_MODELS_DIR=/path/to/models
+SWAPDECK_CONFIG_DIR=/path/to/config
+IGNITE_PORT=3000
+LLAMA_SWAP_PORT=8090
 ```
 
 ## First Run

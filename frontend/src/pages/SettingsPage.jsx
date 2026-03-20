@@ -135,7 +135,9 @@ function SettingsPage() {
               <div className="font-medium mb-2">Example `.env`</div>
               <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
 {`SWAPDECK_MODELS_DIR=/home/your-user/models
-SWAPDECK_CONFIG_DIR=/home/your-user/ignite-config`}
+SWAPDECK_CONFIG_DIR=/home/your-user/ignite-config
+IGNITE_PORT=3000
+LLAMA_SWAP_PORT=8090`}
               </div>
             </div>
           </div>
