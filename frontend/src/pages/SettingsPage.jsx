@@ -155,13 +155,38 @@ SWAPDECK_CONFIG_DIR=/home/your-user/ignite-config`}
           {fields.map(({ key, label, type, description }) => (
             <div key={key}>
               <label className="block text-sm font-medium mb-1">{label}</label>
-              <input
-                type={type}
-                value={settings[key] ?? ''}
-                onChange={(e) => handleChange(key, type === 'number' ? parseInt(e.target.value) || 0 : e.target.value)}
-                className={inputClass}
-                disabled={meta?.managed_runtime}
-              />
+              {meta?.managed_runtime ? (
+                <div
+                  className="w-full px-3 py-2 rounded-lg border"
+                  style={{
+                    borderColor: 'var(--line-soft)',
+                    background: 'rgba(148, 163, 184, 0.08)',
+                    color: 'var(--text-muted)'
+                  }}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className={type === 'number' ? '' : 'font-mono text-sm'}>
+                      {settings[key] ?? ''}
+                    </span>
+                    <span
+                      className="text-xs px-2 py-1 rounded-full"
+                      style={{
+                        background: 'rgba(148, 163, 184, 0.14)',
+                        color: 'var(--text-muted)'
+                      }}
+                    >
+                      Managed by Docker
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <input
+                  type={type}
+                  value={settings[key] ?? ''}
+                  onChange={(e) => handleChange(key, type === 'number' ? parseInt(e.target.value) || 0 : e.target.value)}
+                  className={inputClass}
+                />
+              )}
               <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>{description}</p>
             </div>
           ))}
