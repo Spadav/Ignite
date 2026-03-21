@@ -138,6 +138,14 @@ def get_docker_control_warning() -> Optional[str]:
     return DOCKER_CONTROL_WARNING
 
 
+def get_docker_log_container_map() -> Dict[str, str]:
+    return {
+        "ignite": "ignite",
+        "runtime": DOCKER_RUNTIME_CONTAINER,
+        "llmfit": DOCKER_SUPPORT_CONTAINERS[0] if DOCKER_SUPPORT_CONTAINERS else "llmfit",
+    }
+
+
 def get_llama_swap_executable() -> str:
     """Resolve llama-swap to an executable path that also works from GUI-launched shells."""
     configured = os.environ.get("LLAMA_SWAP_BIN")
@@ -583,6 +591,30 @@ def get_upstream_logs(lines: int = 100) -> List[str]:
         filtered.append(line)
 
     return filtered[-lines:]
+
+
+def get_docker_container_logs(stream_name: str, lines: int = 200) -> List[str]:
+    if not is_docker_managed_runtime():
+        raise HTTPException(status_code=400, detail="Docker container logs are only available in Docker mode")
+
+    client = get_docker_client()
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Docker log access is unavailable. Mount /var/run/docker.sock into the Ignite container.",
+        )
+
+    container_name = get_docker_log_container_map().get(stream_name)
+    if not container_name:
+        raise HTTPException(status_code=404, detail=f"Unknown Docker log stream: {stream_name}")
+
+    try:
+        container = client.containers.get(container_name)
+        raw_logs = container.logs(stdout=True, stderr=True, tail=lines)
+        text = raw_logs.decode("utf-8", errors="replace")
+        return [line.rstrip() for line in text.splitlines() if line.strip()]
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail=f"Docker container '{container_name}' was not found")
 
 
 def get_llama_swap_events(lines: int = 100) -> List[str]:
@@ -1263,6 +1295,12 @@ def api_logs(lines: int = 100):
 def api_upstream_logs(lines: int = 100):
     """Get recent upstream/model logs (filtered)."""
     return get_upstream_logs(lines)
+
+
+@app.get("/api/logs/docker/{stream_name}")
+def api_docker_logs(stream_name: str, lines: int = 200):
+    """Get recent Docker container logs for Ignite-managed services."""
+    return get_docker_container_logs(stream_name, lines)
 
 
 @app.get("/api/logs/events")

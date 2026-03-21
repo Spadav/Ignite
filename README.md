@@ -99,6 +99,7 @@ What `stop.sh` does:
 
 What `update.sh` does:
 - pulls the latest Git changes
+- pulls the latest runtime images
 - rebuilds and restarts the stack
 
 ## Default Folders

@@ -144,6 +144,18 @@ LLAMA_SWAP_PORT=8090`}
         </div>
       )}
 
+      {meta?.managed_runtime && (
+        <div className="card mb-6">
+          <h3 className="text-lg font-semibold mb-2">Runtime Updates</h3>
+          <p className="text-sm mb-3" style={{ color: 'var(--text-muted)' }}>
+            To update llama.cpp and the runtime images, run the repo update script from your terminal. It pulls the latest repo changes, refreshes runtime images, and rebuilds the stack.
+          </p>
+          <div className="rounded-lg border p-3 font-mono text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+            ./scripts/update.sh
+          </div>
+        </div>
+      )}
+
       {message && (
         <div className={`mb-4 px-4 py-2 rounded-lg text-sm border ${
           message.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'

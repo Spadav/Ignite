@@ -12,10 +12,12 @@ ensure_layout
 print_step "3/4" "Pulling latest repo changes"
 git -C "$ROOT_DIR" pull --ff-only
 
-print_step "4/4" "Rebuilding and restarting Ignite"
+print_step "4/4" "Refreshing runtime images and restarting Ignite"
 (
   cd "$ROOT_DIR"
-  docker_compose up -d --build
+  docker_compose pull llmfit
+  docker_compose build --pull ignite llama-runtime
+  docker_compose up -d
 )
 
 printf '\nIgnite updated.\n'

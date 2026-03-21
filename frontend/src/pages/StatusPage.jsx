@@ -24,6 +24,9 @@ function StatusPage() {
   const [proxyLogs, setProxyLogs] = useState([])
   const [upstreamLogs, setUpstreamLogs] = useState([])
   const [logTab, setLogTab] = useState('proxy')
+  const [dockerLogTab, setDockerLogTab] = useState('runtime')
+  const [dockerLogs, setDockerLogs] = useState([])
+  const [dockerLogError, setDockerLogError] = useState('')
   const [starting, setStarting] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [copiedField, setCopiedField] = useState('')
@@ -49,6 +52,37 @@ function StatusPage() {
       upstreamSource.close()
     }
   }, [])
+
+  useEffect(() => {
+    if (runtimeMode !== 'docker') return
+
+    let cancelled = false
+
+    const loadDockerLogs = async () => {
+      try {
+        const response = await fetch(`/api/logs/docker/${dockerLogTab}?lines=200`)
+        const data = await response.json().catch(() => [])
+        if (!response.ok) {
+          throw new Error(data.detail || 'Failed to load Docker logs')
+        }
+        if (!cancelled) {
+          setDockerLogs(Array.isArray(data) ? data : [])
+          setDockerLogError('')
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setDockerLogError(error.message || 'Failed to load Docker logs')
+        }
+      }
+    }
+
+    loadDockerLogs()
+    const interval = setInterval(loadDockerLogs, 5000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [runtimeMode, dockerLogTab])
 
   const visibleLogs = logTab === 'proxy'
     ? proxyLogs.filter((line) => !line.includes('GET /v1/models'))
@@ -316,6 +350,49 @@ ${sampleRequest}`
           )}
         </div>
       </div>
+
+      {runtimeMode === 'docker' && (
+        <div className="card mt-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">Docker Container Logs</h3>
+            <div className="flex items-center gap-2 text-sm">
+              <button
+                onClick={() => setDockerLogTab('runtime')}
+                className={`px-3 py-1 rounded ${dockerLogTab === 'runtime' ? 'btn-primary text-white' : 'btn-secondary'}`}
+              >
+                Runtime
+              </button>
+              <button
+                onClick={() => setDockerLogTab('ignite')}
+                className={`px-3 py-1 rounded ${dockerLogTab === 'ignite' ? 'btn-primary text-white' : 'btn-secondary'}`}
+              >
+                Ignite
+              </button>
+              <button
+                onClick={() => setDockerLogTab('llmfit')}
+                className={`px-3 py-1 rounded ${dockerLogTab === 'llmfit' ? 'btn-primary text-white' : 'btn-secondary'}`}
+              >
+                llmfit
+              </button>
+            </div>
+          </div>
+          <div className="p-4 rounded-lg font-mono text-sm overflow-y-auto max-h-96 border" style={{ background: '#0b1220', borderColor: 'var(--line-soft)', color: '#8de4af' }}>
+            {dockerLogError ? (
+              <div className="whitespace-pre-wrap" style={{ color: '#fda4af' }}>
+                {dockerLogError}
+              </div>
+            ) : dockerLogs.length === 0 ? (
+              <div className="whitespace-pre-wrap" style={{ color: '#94a3b8' }}>
+                No Docker logs yet for this container.
+              </div>
+            ) : (
+              dockerLogs.map((line, index) => (
+                <div key={index} className="whitespace-pre-wrap">{line}</div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
