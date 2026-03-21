@@ -238,6 +238,17 @@ class DownloadTask:
 
 active_downloads: Dict[str, DownloadTask] = {}
 docker_gpu_preflight_cache: Dict[str, Any] = {"checked_at": None, "result": None}
+active_runtime_model_cache: Dict[str, Any] = {
+    "checked_at": None,
+    "result": {
+        "model_id": "",
+        "display_name": "",
+        "state": "unknown",
+        "source": "events",
+        "derived": True,
+        "last_event": "",
+    },
+}
 
 
 def run_command(cmd: List[str], timeout: float = 30.0) -> subprocess.CompletedProcess:
@@ -621,21 +632,130 @@ def get_llama_swap_events(lines: int = 100) -> List[str]:
     """Fetch recent llama-swap events from its API, if available."""
     base_url = get_llama_swap_base_url()
     try:
-        response = requests.get(f"{base_url}/api/events", timeout=3)
-        if response.status_code != 200:
-            return []
+        with requests.get(f"{base_url}/api/events", stream=True, timeout=(0.5, 0.5)) as response:
+            if response.status_code != 200:
+                return []
 
-        content_type = response.headers.get("content-type", "").lower()
-        if "application/json" in content_type:
-            payload = response.json()
-            if isinstance(payload, list):
-                return [str(item) for item in payload[-lines:]]
-            return [json.dumps(payload)]
+            content_type = response.headers.get("content-type", "").lower()
+            if "application/json" in content_type:
+                payload = response.json()
+                if isinstance(payload, list):
+                    return [str(item) for item in payload[-lines:]]
+                return [json.dumps(payload)]
 
-        raw_lines = [line for line in response.text.splitlines() if line.strip()]
-        return raw_lines[-lines:]
+            raw_lines: List[str] = []
+            for raw_line in response.iter_lines(decode_unicode=True):
+                if raw_line is None:
+                    continue
+                line = raw_line.strip()
+                if not line:
+                    continue
+                raw_lines.append(line)
+                if len(raw_lines) >= lines:
+                    break
+
+            return raw_lines[-lines:]
     except Exception:
         return []
+
+
+def extract_event_text(raw_line: str) -> str:
+    """Normalize llama-swap event payloads into plain text."""
+    text = (raw_line or "").strip()
+    if text.startswith("data:"):
+        text = text[5:].strip()
+
+    try:
+        payload = json.loads(text)
+        if isinstance(payload, dict):
+            inner = payload.get("data")
+            if isinstance(inner, str):
+                return inner
+            if inner is not None:
+                return json.dumps(inner)
+    except Exception:
+        pass
+
+    return text
+
+
+def get_active_runtime_model(lines: int = 250) -> Dict[str, Any]:
+    """Infer the currently active model from llama-swap runtime events."""
+    checked_at = active_runtime_model_cache.get("checked_at")
+    if isinstance(checked_at, datetime) and datetime.now() - checked_at < timedelta(seconds=5):
+        cached = active_runtime_model_cache.get("result")
+        if isinstance(cached, dict):
+            return cached
+
+    if is_docker_managed_runtime():
+        try:
+            events = get_docker_container_logs("runtime", lines)
+        except Exception:
+            events = get_llama_swap_events(lines)
+    else:
+        events = get_llama_swap_events(lines)
+    if not events:
+        cached = active_runtime_model_cache.get("result")
+        if isinstance(cached, dict):
+            return cached
+        result = {
+            "model_id": "",
+            "display_name": "",
+            "state": "unknown",
+            "source": "events",
+            "derived": True,
+            "last_event": "",
+        }
+        active_runtime_model_cache.update({"checked_at": datetime.now(), "result": result})
+        return result
+
+    try:
+        config_models = (get_config().get("models") or {})
+    except Exception:
+        config_models = {}
+
+    active_model_id = ""
+    last_event = ""
+
+    for raw_line in events:
+        line = extract_event_text(raw_line).replace('\\"', '"')
+
+        health_match = re.search(r"<([^>]+)>\s+Health check passed", line)
+        if health_match:
+            active_model_id = health_match.group(1).strip()
+            last_event = line
+            continue
+
+        unload_match = re.search(r"/api/models/unload/([A-Za-z0-9_.:-]+)", line)
+        if unload_match:
+            unloaded_model_id = unload_match.group(1).strip()
+            if unloaded_model_id == active_model_id:
+                active_model_id = ""
+            last_event = line
+
+    if not active_model_id:
+        result = {
+            "model_id": "",
+            "display_name": "",
+            "state": "idle",
+            "source": "events",
+            "derived": True,
+            "last_event": last_event,
+        }
+        active_runtime_model_cache.update({"checked_at": datetime.now(), "result": result})
+        return result
+
+    display_name = str((config_models.get(active_model_id) or {}).get("name") or active_model_id)
+    result = {
+        "model_id": active_model_id,
+        "display_name": display_name,
+        "state": "active",
+        "source": "events",
+        "derived": True,
+        "last_event": last_event,
+    }
+    active_runtime_model_cache.update({"checked_at": datetime.now(), "result": result})
+    return result
 
 
 def list_gguf_files() -> List[Dict[str, Any]]:
@@ -1254,6 +1374,7 @@ def api_status():
     gpu_stats = get_runtime_gpu_stats()
     docker_gpu = get_docker_gpu_preflight()
     config_summary = get_config_summary()
+    active_runtime_model = get_active_runtime_model()
     
     logger.info(f"Status: running={running}, pid={pid}, gpu={gpu_stats}, docker_gpu={docker_gpu.get('state')}")
     
@@ -1269,6 +1390,7 @@ def api_status():
         "llama_swap_port": settings["llama_swap_port"],
         "config_path": settings["llama_swap_config"],
         "config_exists": Path(os.path.expanduser(settings["llama_swap_config"])).exists(),
+        "active_runtime_model": active_runtime_model,
         **config_summary,
     }
 

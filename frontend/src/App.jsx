@@ -27,6 +27,7 @@ function App() {
     { label: 'Config', path: '/config' },
     { label: 'Models', path: '/models' },
     { label: 'Test', path: '/test' },
+    { label: 'Logs', path: '/logs' },
     { label: 'Settings', path: '/settings' },
   ]
 

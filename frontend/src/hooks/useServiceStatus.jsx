@@ -16,6 +16,7 @@ export function useServiceStatus(pollMs = 10000) {
     configuredModelIds: [],
     defaultModelId: '',
     defaultModelMode: 'chat',
+    activeRuntimeModel: null,
   })
 
   const refreshStatus = async () => {
@@ -38,6 +39,7 @@ export function useServiceStatus(pollMs = 10000) {
           configuredModelIds: Array.isArray(data.configured_model_ids) ? data.configured_model_ids : [],
           defaultModelId: data.default_model_id || '',
           defaultModelMode: data.default_model_mode || 'chat',
+          activeRuntimeModel: data.active_runtime_model || null,
         })
     } catch (error) {
         setStatus({
@@ -55,6 +57,7 @@ export function useServiceStatus(pollMs = 10000) {
           configuredModelIds: [],
           defaultModelId: '',
           defaultModelMode: 'chat',
+          activeRuntimeModel: null,
         })
     }
   }
