@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useServiceStatus } from '../hooks/useServiceStatus'
 import { useGpuStats } from '../hooks/useGpuStats'
+import { getGpuSetupUi, getLinuxGpuSetupCommands } from '../utils/gpuSetup'
 
 function StatusPage() {
   const navigate = useNavigate()
@@ -29,6 +30,7 @@ function StatusPage() {
   const [runtimeModelsError, setRuntimeModelsError] = useState('')
   const [copiedField, setCopiedField] = useState('')
   const [showConnectApps, setShowConnectApps] = useState(false)
+  const [showGpuGuide, setShowGpuGuide] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -138,6 +140,8 @@ function StatusPage() {
 
   const formatGiB = (value) => Number(value || 0).toFixed(1).replace(/\.0$/, '')
   const activeModels = runtimeModels.filter((model) => model.state && model.state !== 'stopped')
+  const gpuSetup = getGpuSetupUi(dockerGpu, gpuStats)
+  const gpuSetupCommands = getLinuxGpuSetupCommands()
 
   return (
     <div className="p-6">
@@ -335,22 +339,54 @@ ${sampleRequest}`
       >
         <div className="flex items-center gap-2 mb-2">
           <span className={`w-3 h-3 rounded-full ${dockerGpuTone.badge}`}></span>
-          <h3 className="text-base font-semibold">Docker GPU Preflight</h3>
+          <h3 className="text-base font-semibold">{gpuSetup.title}</h3>
         </div>
         <p className="font-medium">
-          {dockerGpu?.message || 'Checking Docker GPU runtime...'}
+          {gpuSetup.message}
         </p>
-        {dockerGpu?.state !== 'ready' && (
-          <p className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>
-            Ignite runs in Docker, but GPU-backed llama.cpp containers need host-level NVIDIA Container Toolkit support.
-          </p>
+        <p className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>
+          {gpuSetup.nextStep}
+        </p>
+        {gpuSetup.state !== 'ready' && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              onClick={() => setShowGpuGuide((prev) => !prev)}
+              className="btn btn-secondary text-sm"
+            >
+              {showGpuGuide ? 'Hide GPU Setup Guide' : 'Open GPU Setup Guide'}
+            </button>
+          </div>
+        )}
+        {gpuSetup.state !== 'ready' && showGpuGuide && (
+          <div className="mt-4 rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
+            <div className="font-medium mb-2">Linux GPU Setup Guide</div>
+            <div className="text-sm mb-3" style={{ color: 'var(--text-muted)' }}>
+              Run these commands on the host, not inside a container. This is the usual setup path for Ubuntu or Debian.
+            </div>
+            <div className="space-y-2">
+              {gpuSetupCommands.map((line, index) => (
+                <div
+                  key={index}
+                  className="font-mono text-sm rounded-lg border p-3 break-all"
+                  style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.04)' }}
+                >
+                  {line}
+                </div>
+              ))}
+            </div>
+          </div>
         )}
         {dockerGpu?.details?.length > 0 && (
-          <div className="mt-3 space-y-1 text-sm" style={{ color: 'var(--text-muted)' }}>
-            {dockerGpu.details.map((detail, index) => (
-              <div key={index}>- {detail}</div>
-            ))}
-          </div>
+          <details className="mt-4">
+            <summary className="cursor-pointer text-sm font-medium" style={{ color: 'var(--text-muted)' }}>
+              Advanced Details
+            </summary>
+            <div className="mt-3 space-y-1 text-sm" style={{ color: 'var(--text-muted)' }}>
+              {dockerGpu.details.map((detail, index) => (
+                <div key={index}>- {detail}</div>
+              ))}
+            </div>
+          </details>
         )}
       </div>
 

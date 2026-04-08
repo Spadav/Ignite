@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { getGpuSetupUi } from '../utils/gpuSetup'
 
 const USE_CASES = [
   { key: 'chat', label: 'Chat' },
@@ -118,6 +119,7 @@ function SetupPage() {
   const topModel = useMemo(() => (discover?.models || [])[0] || null, [discover])
   const topRepoId = extractRepoId(topModel)
   const dockerReady = status?.docker_gpu?.state === 'ready' || status?.docker_gpu?.state === 'containerized'
+  const gpuSetup = getGpuSetupUi(status?.docker_gpu, status?.gpu)
   const lastTestPassed = Boolean(
     lastTestState && !lastTestState.error && (lastTestState.response || lastTestState.reasoning)
   )
@@ -134,9 +136,9 @@ function SetupPage() {
     {
       title: 'Confirm GPU support',
       done: Boolean(dockerReady),
-      description: status?.docker_gpu?.message || 'Checking Docker GPU support...',
+      description: gpuSetup.message,
       action: () => navigate('/status'),
-      actionLabel: 'Review GPU Status',
+      actionLabel: gpuSetup.state === 'ready' ? 'Review GPU Status' : 'Open GPU Setup',
     },
     {
       title: 'Pick a model',
