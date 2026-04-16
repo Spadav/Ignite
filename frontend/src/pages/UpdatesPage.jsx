@@ -14,6 +14,12 @@ function statusTone(status) {
       return { bg: 'rgba(148, 163, 184, 0.14)', border: 'rgba(148, 163, 184, 0.35)', text: '#cbd5e1', label: 'Tracks Latest On Pull' }
     case 'local_app':
       return { bg: 'rgba(168, 85, 247, 0.14)', border: 'rgba(168, 85, 247, 0.35)', text: '#e9d5ff', label: 'App Layer' }
+    case 'runtime_offline':
+      return { bg: 'rgba(148, 163, 184, 0.14)', border: 'rgba(148, 163, 184, 0.35)', text: '#cbd5e1', label: 'Runtime Offline' }
+    case 'docker_unavailable':
+      return { bg: 'rgba(239, 68, 68, 0.14)', border: 'rgba(239, 68, 68, 0.35)', text: '#fecaca', label: 'Docker Unavailable' }
+    case 'probe_failed':
+      return { bg: 'rgba(239, 68, 68, 0.14)', border: 'rgba(239, 68, 68, 0.35)', text: '#fecaca', label: 'Version Check Failed' }
     default:
       return { bg: 'rgba(148, 163, 184, 0.14)', border: 'rgba(148, 163, 184, 0.35)', text: '#cbd5e1', label: 'Unknown' }
   }
@@ -44,7 +50,7 @@ function UpdatesPage() {
   }
 
   useEffect(() => {
-    loadUpdates(false)
+    loadUpdates(true)
   }, [])
 
   if (loading) return <p className="p-6">Loading...</p>
@@ -69,12 +75,23 @@ function UpdatesPage() {
         </div>
       )}
 
+      {data?.runtime_notice && (
+        <div className="mb-4 px-4 py-3 rounded-lg text-sm border" style={{ borderColor: 'var(--line-soft)', background: 'rgba(245, 158, 11, 0.14)', color: '#fde68a' }}>
+          <div className="font-medium mb-1">Runtime version check incomplete</div>
+          <div>{data.runtime_notice.message}</div>
+          <div className="mt-2" style={{ color: 'var(--text-muted)' }}>
+            Upstream check still ran. Start the runtime if you want Ignite to read the exact installed `llama-swap` and `llama.cpp` versions.
+          </div>
+        </div>
+      )}
+
       <div className="card mb-6">
         <h3 className="text-lg font-semibold mb-2">How Updates Work</h3>
         <div className="space-y-2 text-sm" style={{ color: 'var(--text-muted)' }}>
           <div>- `llama-swap` is pinned in the runtime image, so Ignite can compare it directly with the latest upstream release.</div>
           <div>- `llama.cpp` is read from the running runtime container, so Ignite can show the actual build and commit in use.</div>
           <div>- Use `Check For Updates` to refresh upstream metadata and changelog links.</div>
+          <div>- If the runtime is stopped, Ignite can still check upstream, but it cannot read the currently installed runtime versions.</div>
         </div>
         {data?.checked_at && (
           <p className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>

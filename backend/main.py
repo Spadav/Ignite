@@ -401,13 +401,17 @@ def parse_current_runtime_refs() -> Dict[str, Any]:
 
 def get_runtime_binary_versions(refresh: bool = False) -> Dict[str, Any]:
     checked_at = runtime_versions_cache.get("checked_at")
+    cached_result = runtime_versions_cache.get("result")
     if (
         not refresh
         and isinstance(checked_at, datetime)
-        and datetime.now() - checked_at < timedelta(minutes=5)
-        and isinstance(runtime_versions_cache.get("result"), dict)
+        and isinstance(cached_result, dict)
     ):
-        return runtime_versions_cache["result"]
+        cache_age = datetime.now() - checked_at
+        probe_state = str(cached_result.get("probe_state") or "unknown")
+        max_age = timedelta(minutes=5) if probe_state == "ok" else timedelta(seconds=30)
+        if cache_age < max_age:
+            return cached_result
 
     result = {
         "llama_swap_version": "unknown",
@@ -416,15 +420,35 @@ def get_runtime_binary_versions(refresh: bool = False) -> Dict[str, Any]:
         "llama_cpp_version": "unknown",
         "llama_cpp_build": "",
         "llama_cpp_commit": "",
+        "probe_state": "unknown",
+        "probe_message": "",
     }
 
     client = get_docker_client()
     if client is None:
+        result.update(
+            {
+                "probe_state": "docker_unavailable",
+                "probe_message": "Ignite cannot reach Docker, so runtime versions could not be checked.",
+            }
+        )
         runtime_versions_cache.update({"checked_at": datetime.now(), "result": result})
         return result
 
     try:
         container = client.containers.get(DOCKER_RUNTIME_CONTAINER)
+        container.reload()
+        container_status = str(getattr(container, "status", "") or "").lower()
+        if container_status != "running":
+            result.update(
+                {
+                    "probe_state": "runtime_offline",
+                    "probe_message": "The runtime container is not running, so current llama-swap and llama.cpp versions are unavailable.",
+                }
+            )
+            runtime_versions_cache.update({"checked_at": datetime.now(), "result": result})
+            return result
+
         swap_exec_result = container.exec_run(
             ["/bin/bash", "-lc", "llama-swap --version || /usr/local/bin/llama-swap --version || llama-swap -v"],
             stdout=True,
@@ -466,8 +490,23 @@ def get_runtime_binary_versions(refresh: bool = False) -> Dict[str, Any]:
                     "llama_cpp_commit": commit,
                 }
             )
+        if result["llama_swap_version"] != "unknown" or result["llama_cpp_version"] != "unknown":
+            result.update({"probe_state": "ok", "probe_message": ""})
+        else:
+            result.update(
+                {
+                    "probe_state": "probe_failed",
+                    "probe_message": "Ignite reached the runtime container, but could not read version information from it.",
+                }
+            )
     except Exception as exc:
         logger.warning("Failed to detect runtime llama.cpp version: %s", exc)
+        result.update(
+            {
+                "probe_state": "probe_failed",
+                "probe_message": "Ignite could not read version information from the runtime container.",
+            }
+        )
 
     runtime_versions_cache.update({"checked_at": datetime.now(), "result": result})
     return result
@@ -525,12 +564,25 @@ def get_updates_payload(refresh: bool = False) -> Dict[str, Any]:
 
     latest_llama_cpp_sha = str((llama_cpp_latest_commit or {}).get("sha") or "").strip()
     current_llama_cpp_commit = runtime_versions.get("llama_cpp_commit", "")
+    runtime_probe_state = str(runtime_versions.get("probe_state") or "unknown")
+    runtime_probe_message = str(runtime_versions.get("probe_message") or "").strip()
     if current_llama_cpp_commit and latest_llama_cpp_sha:
         llama_cpp_status = "up_to_date" if latest_llama_cpp_sha.startswith(current_llama_cpp_commit) else "upstream_ahead"
         latest_llama_cpp_label = f"master ({latest_llama_cpp_sha[:9]})"
     else:
-        llama_cpp_status = "unknown"
+        llama_cpp_status = runtime_probe_state if runtime_probe_state != "ok" else "unknown"
         latest_llama_cpp_label = (llama_cpp_repo or {}).get("pushed_at")
+
+    llama_swap_status = compare_numeric_versions(runtime_versions["llama_swap_build"], llama_swap_release.get("tag_name", "")) if llama_swap_release else "unknown"
+    if runtime_versions["llama_swap_version"] == "unknown" and runtime_probe_state != "ok":
+        llama_swap_status = runtime_probe_state
+
+    updates_notice = None
+    if runtime_probe_state in {"runtime_offline", "docker_unavailable", "probe_failed"}:
+        updates_notice = {
+            "state": runtime_probe_state,
+            "message": runtime_probe_message or "Ignite could not read current runtime versions.",
+        }
 
     components = [
         {
@@ -555,9 +607,9 @@ def get_updates_payload(refresh: bool = False) -> Dict[str, Any]:
         {
             "id": "llama-swap",
             "name": "llama-swap",
-            "current": runtime_versions["llama_swap_version"],
+            "current": runtime_versions["llama_swap_version"] if runtime_versions["llama_swap_version"] != "unknown" else ("Runtime offline" if runtime_probe_state == "runtime_offline" else "Unavailable"),
             "latest": llama_swap_release.get("tag_name") if llama_swap_release else None,
-            "status": compare_numeric_versions(runtime_versions["llama_swap_build"], llama_swap_release.get("tag_name", "")) if llama_swap_release else "unknown",
+            "status": llama_swap_status,
             "summary": "Pinned release inside the runtime image. This can be compared directly to the latest upstream release.",
             "changelog_url": (llama_swap_release or {}).get("html_url") or "https://github.com/mostlygeek/llama-swap/releases",
             "release_url": "https://github.com/mostlygeek/llama-swap/releases",
@@ -574,7 +626,7 @@ def get_updates_payload(refresh: bool = False) -> Dict[str, Any]:
         {
             "id": "llama.cpp",
             "name": "llama.cpp",
-            "current": runtime_versions["llama_cpp_version"],
+            "current": runtime_versions["llama_cpp_version"] if runtime_versions["llama_cpp_version"] != "unknown" else ("Runtime offline" if runtime_probe_state == "runtime_offline" else "Unavailable"),
             "latest": latest_llama_cpp_label,
             "status": llama_cpp_status,
             "summary": "Reported directly by the running runtime container. `./scripts/update.sh` refreshes the published runtime image. Upstream master may still move ahead between image publishes.",
@@ -610,6 +662,7 @@ def get_updates_payload(refresh: bool = False) -> Dict[str, Any]:
     payload = {
         "checked_at": datetime.now().isoformat(),
         "components": components,
+        "runtime_notice": updates_notice,
     }
     updates_cache.update({"checked_at": datetime.now(), "result": payload})
     return payload
