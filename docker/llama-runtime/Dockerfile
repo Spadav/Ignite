@@ -3,7 +3,7 @@ FROM ${LLAMA_CPP_IMAGE}
 
 USER root
 
-ARG LLAMA_SWAP_VERSION=202
+ARG LLAMA_SWAP_VERSION=206
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

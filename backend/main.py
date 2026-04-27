@@ -1553,6 +1553,7 @@ class AddModelToConfigRequest(BaseModel):
 class TestPrompt(BaseModel):
     prompt: str
     model: str = ""
+    image_data_url: str = ""
 
 
 def sanitize_model_id(value: str) -> str:
@@ -2071,16 +2072,28 @@ def api_test_prompt(prompt: TestPrompt):
         request_mode = get_configured_model_mode(prompt.model)
         endpoint = "/v1/chat/completions"
         payload: Dict[str, Any]
+        image_data_url = (prompt.image_data_url or "").strip()
 
         if request_mode == "completion":
+            if image_data_url:
+                raise HTTPException(status_code=400, detail="Completion models do not support image input in Test.")
             endpoint = "/v1/completions"
             payload = {
                 "prompt": prompt.prompt,
                 "max_tokens": 512,
             }
         else:
+            user_content: Any
+            if image_data_url:
+                user_content = []
+                if prompt.prompt.strip():
+                    user_content.append({"type": "text", "text": prompt.prompt})
+                user_content.append({"type": "image_url", "image_url": {"url": image_data_url}})
+            else:
+                user_content = prompt.prompt
+
             payload = {
-                "messages": [{"role": "user", "content": prompt.prompt}],
+                "messages": [{"role": "user", "content": user_content}],
                 "max_tokens": 512,
             }
 

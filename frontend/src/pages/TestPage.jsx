@@ -23,6 +23,8 @@ function TestPage() {
   const [searchParams] = useSearchParams()
   const [prompt, setPrompt] = useState('')
   const [model, setModel] = useState('')
+  const [imageDataUrl, setImageDataUrl] = useState('')
+  const [imageName, setImageName] = useState('')
   const [models, setModels] = useState({})
   const [response, setResponse] = useState('')
   const [reasoning, setReasoning] = useState('')
@@ -93,7 +95,7 @@ function TestPage() {
       const res = await fetch('/api/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, model })
+        body: JSON.stringify({ prompt, model, image_data_url: imageDataUrl })
       })
 
       if (!res.ok) {
@@ -129,6 +131,29 @@ function TestPage() {
   const reasoningText = reasoning.trim()
   const hasThinking = reasoningText.length > 0 || thinkingBlocks.length > 0
   const hasResult = response.trim().length > 0 || reasoningText.length > 0
+  const hasImage = imageDataUrl.length > 0
+
+  const handleImageChange = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) {
+      setImageDataUrl('')
+      setImageName('')
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      setImageDataUrl(result)
+      setImageName(file.name)
+    }
+    reader.onerror = () => {
+      setError('Failed to read image file.')
+      setImageDataUrl('')
+      setImageName('')
+    }
+    reader.readAsDataURL(file)
+  }
 
   return (
     <div className="p-6">
@@ -169,13 +194,51 @@ function TestPage() {
           </div>
         )}
 
+        {model && selectedModelMode !== 'completion' && (
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-1">Image</label>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleImageChange}
+              className="w-full px-3 py-2 rounded-lg border dark:border-gray-600 dark:bg-gray-700"
+            />
+            <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+              Optional. Add an image to test a vision-capable chat model with text and image input together.
+            </p>
+            {hasImage && (
+              <div className="mt-3 rounded-lg border p-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <div className="text-sm font-medium">{imageName || 'Selected image'}</div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImageDataUrl('')
+                      setImageName('')
+                    }}
+                    className="btn btn-secondary text-sm"
+                  >
+                    Remove Image
+                  </button>
+                </div>
+                <img
+                  src={imageDataUrl}
+                  alt={imageName || 'Selected test image'}
+                  className="max-h-72 rounded-lg border"
+                  style={{ borderColor: 'var(--line-soft)' }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Prompt */}
         <div>
           <label className="block text-sm font-medium mb-1">Prompt</label>
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder={selectedModelMode === 'completion' ? 'Enter a completion prompt or code prefix...' : 'Enter your prompt here...'}
+            placeholder={selectedModelMode === 'completion' ? 'Enter a completion prompt or code prefix...' : (hasImage ? 'Ask about the image or combine image + text instructions...' : 'Enter your prompt here...')}
             rows={4}
             className="w-full px-3 py-2 rounded-lg border dark:border-gray-600 dark:bg-gray-700 resize-none"
           />
@@ -183,7 +246,7 @@ function TestPage() {
 
         <button
           onClick={handleSubmit}
-          disabled={loading || !prompt.trim() || !model}
+          disabled={loading || (!prompt.trim() && !hasImage) || !model}
           className="btn btn-primary mt-4"
         >
           {loading ? 'Generating...' : 'Send Prompt'}
