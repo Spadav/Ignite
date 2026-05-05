@@ -126,17 +126,28 @@ function StatusPage() {
     }
   }
 
-  const apiBaseUrl = `${window.location.protocol}//${window.location.hostname}:${llamaSwapPort}/v1`
-  const modelsUrl = `${apiBaseUrl}/models`
+  const localApiBaseUrl = `${window.location.protocol}//127.0.0.1:${llamaSwapPort}/v1`
+  const currentHostApiBaseUrl = `${window.location.protocol}//${window.location.hostname}:${llamaSwapPort}/v1`
+  const modelsUrl = `${localApiBaseUrl}/models`
   const hasConfiguredModels = configuredModelCount > 0
   const sampleModelId = defaultModelId || configuredModelIds[0] || 'YourModel'
+  const sampleEmbeddingModelId = configuredModelIds.find((id) => /embed/i.test(id)) || 'YourEmbeddingModel'
   const sampleRequest = defaultModelMode === 'completion'
-    ? `curl ${apiBaseUrl}/completions \\
+    ? `curl ${localApiBaseUrl}/completions \\
   -H "Content-Type: application/json" \\
   -d '{"model":"${sampleModelId}","prompt":"Write a short function that adds two numbers."}'`
-    : `curl ${apiBaseUrl}/chat/completions \\
+    : `curl ${localApiBaseUrl}/chat/completions \\
   -H "Content-Type: application/json" \\
   -d '{"model":"${sampleModelId}","messages":[{"role":"user","content":"hi"}]}'`
+  const sampleVisionRequest = `curl ${localApiBaseUrl}/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"${sampleModelId}","messages":[{"role":"user","content":[{"type":"text","text":"Describe this image."},{"type":"image_url","image_url":{"url":"https://example.com/image.jpg"}}]}]}'`
+  const sampleCompletionRequest = `curl ${localApiBaseUrl}/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"YourCompletionModel","prompt":"Complete this code:\\nfunction add(a, b) {"}'`
+  const sampleEmbeddingsRequest = `curl ${localApiBaseUrl}/embeddings \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"${sampleEmbeddingModelId}","input":"Local AI is useful for private workflows."}'`
 
   const formatGiB = (value) => Number(value || 0).toFixed(1).replace(/\.0$/, '')
   const activeModels = runtimeModels.filter((model) => model.state && model.state !== 'stopped')
@@ -278,15 +289,29 @@ function StatusPage() {
             <div className="space-y-2 mt-3">
               <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
                 <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium">Base URL</div>
-                    <div className="font-mono text-sm mt-1">{apiBaseUrl}</div>
+                    <div>
+                      <div className="text-sm font-medium">Base URL</div>
+                    <div className="font-mono text-sm mt-1">{localApiBaseUrl}</div>
                   </div>
-                  <button onClick={() => copyText('base', apiBaseUrl)} className="btn btn-secondary text-sm">
+                  <button onClick={() => copyText('base', localApiBaseUrl)} className="btn btn-secondary text-sm">
                     {copiedField === 'base' ? 'Copied' : 'Copy'}
                   </button>
                 </div>
               </div>
+
+              {currentHostApiBaseUrl !== localApiBaseUrl && (
+                <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium">Current Host URL</div>
+                      <div className="font-mono text-sm mt-1">{currentHostApiBaseUrl}</div>
+                    </div>
+                    <button onClick={() => copyText('base-current-host', currentHostApiBaseUrl)} className="btn btn-secondary text-sm">
+                      {copiedField === 'base-current-host' ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
                 <div className="flex items-center justify-between gap-3">
@@ -324,6 +349,74 @@ ${sampleRequest}`
                     : ' using the chat completions endpoint.'}
                 </p>
               )}
+
+              <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+                <div className="font-medium mb-3">API Examples</div>
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between gap-3 mb-1">
+                      <div className="text-sm font-medium">List Models</div>
+                      <button onClick={() => copyText('curl-models', `curl ${modelsUrl}`)} className="btn btn-secondary text-sm">
+                        {copiedField === 'curl-models' ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                    <div className="font-mono whitespace-pre-wrap text-sm" style={{ color: 'var(--text-muted)' }}>
+                      {`curl ${modelsUrl}`}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between gap-3 mb-1">
+                      <div className="text-sm font-medium">Chat</div>
+                      <button onClick={() => copyText('curl-chat', sampleRequest)} className="btn btn-secondary text-sm">
+                        {copiedField === 'curl-chat' ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                    <div className="font-mono whitespace-pre-wrap text-sm" style={{ color: 'var(--text-muted)' }}>
+                      {sampleRequest}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between gap-3 mb-1">
+                      <div className="text-sm font-medium">Vision Chat</div>
+                      <button onClick={() => copyText('curl-vision', sampleVisionRequest)} className="btn btn-secondary text-sm">
+                        {copiedField === 'curl-vision' ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                    <div className="font-mono whitespace-pre-wrap text-sm" style={{ color: 'var(--text-muted)' }}>
+                      {sampleVisionRequest}
+                    </div>
+                    <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                      Use this only with a vision-capable chat model.
+                    </p>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between gap-3 mb-1">
+                      <div className="text-sm font-medium">Completion</div>
+                      <button onClick={() => copyText('curl-completion', sampleCompletionRequest)} className="btn btn-secondary text-sm">
+                        {copiedField === 'curl-completion' ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                    <div className="font-mono whitespace-pre-wrap text-sm" style={{ color: 'var(--text-muted)' }}>
+                      {sampleCompletionRequest}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between gap-3 mb-1">
+                      <div className="text-sm font-medium">Embeddings</div>
+                      <button onClick={() => copyText('curl-embeddings', sampleEmbeddingsRequest)} className="btn btn-secondary text-sm">
+                        {copiedField === 'curl-embeddings' ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                    <div className="font-mono whitespace-pre-wrap text-sm" style={{ color: 'var(--text-muted)' }}>
+                      {sampleEmbeddingsRequest}
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </div>

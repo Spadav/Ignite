@@ -61,6 +61,7 @@ function ConfigPage() {
   const [rawConfig, setRawConfig] = useState('')
   const [advancedGpuMode, setAdvancedGpuMode] = useState(false)
   const [gpuOptions, setGpuOptions] = useState([])
+  const [gpuStatus, setGpuStatus] = useState(null)
   const [guideOpen, setGuideOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -103,10 +104,12 @@ function ConfigPage() {
       setRawConfig(rawData.content || '')
       setAdvancedGpuMode(Boolean(settingsData.advanced_gpu_mode))
       setGpuOptions(Array.isArray(statusData?.gpu?.gpus) ? statusData.gpu.gpus : [])
+      setGpuStatus(statusData?.gpu || null)
       setEnvDrafts(nextEnvDrafts)
       setMessage(null)
     } catch (error) {
       setConfig(null)
+      setGpuStatus(null)
     } finally {
       setLoading(false)
     }
@@ -642,6 +645,7 @@ function ConfigPage() {
 
   const inputClass = 'w-full px-3 py-2 rounded-lg border bg-transparent'
   const folderGroups = getFolderGroups()
+  const hasFallbackOnlyGpu = Boolean(gpuStatus?.available) && gpuOptions.length === 0
 
   return (
     <div className="p-6">
@@ -1206,6 +1210,18 @@ function ConfigPage() {
                                         <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
                                           Advanced GPU Mode pins this model with the selected GPU UUID plus `--split-mode none` and `--main-gpu 0`.
                                         </p>
+                                        {hasFallbackOnlyGpu && (
+                                          <div
+                                            className="mt-2 rounded-lg border p-3 text-xs"
+                                            style={{
+                                              borderColor: 'rgba(245, 158, 11, 0.35)',
+                                              background: 'rgba(245, 158, 11, 0.10)',
+                                              color: '#fde68a'
+                                            }}
+                                          >
+                                            Ignite can see that a GPU exists, but it could not enumerate GPU UUIDs directly. In that state this dropdown falls back to `Any Visible GPU` until the stack is recreated cleanly.
+                                          </div>
+                                        )}
                                       </div>
 
                                       <div>

@@ -18,7 +18,7 @@ services:
       LLAMA_SWAP_PORT: "${LLAMA_SWAP_PORT:-8090}"
       IGNITE_APP_VERSION: "1.0.0"
       LLAMA_CPP_IMAGE_REF: "ghcr.io/ggml-org/llama.cpp:server-cuda"
-      LLAMA_SWAP_VERSION_REF: "198"
+      LLAMA_SWAP_VERSION_REF: "211"
       LLMFIT_IMAGE_REF: "ghcr.io/alexsjones/llmfit:latest"
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility

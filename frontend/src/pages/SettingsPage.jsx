@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react'
 function SettingsPage() {
   const [settings, setSettings] = useState(null)
   const [meta, setMeta] = useState(null)
+  const [runtimeStatus, setRuntimeStatus] = useState(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
@@ -14,14 +15,21 @@ function SettingsPage() {
 
   const fetchSettings = async () => {
     try {
-      const response = await fetch('/api/settings')
-      if (!response.ok) throw new Error('API error')
-      const data = await response.json()
+      const [settingsResponse, statusResponse] = await Promise.all([
+        fetch('/api/settings'),
+        fetch('/api/status')
+      ])
+      if (!settingsResponse.ok || !statusResponse.ok) throw new Error('API error')
+
+      const data = await settingsResponse.json()
+      const statusData = await statusResponse.json()
       setMeta(data._meta || null)
+      setRuntimeStatus(statusData || null)
       delete data._meta
       setSettings(data)
     } catch (error) {
       setSettings(null)
+      setRuntimeStatus(null)
     } finally {
       setLoading(false)
     }
@@ -67,6 +75,44 @@ function SettingsPage() {
   if (!settings) return <p className="p-6 text-red-500">Failed to load settings</p>
 
   const inputClass = "w-full px-3 py-2 rounded-lg border bg-transparent"
+  const detectedGpus = Array.isArray(runtimeStatus?.gpu?.gpus) ? runtimeStatus.gpu.gpus : []
+  const hasFallbackOnlyGpu = Boolean(runtimeStatus?.gpu?.available) && detectedGpus.length === 0
+  const apiBaseUrl = `${window.location.protocol}//127.0.0.1:${settings.llama_swap_port}/v1`
+  const modelsUrl = `${apiBaseUrl}/models`
+  const adminBaseUrl = `${window.location.protocol}//127.0.0.1:${settings.backend_port}/api`
+  const healthUrl = `${window.location.protocol}//127.0.0.1:${settings.backend_port}/health`
+  const configuredModelIds = Array.isArray(runtimeStatus?.configured_model_ids) ? runtimeStatus.configured_model_ids : []
+  const defaultModelId = runtimeStatus?.default_model_id || configuredModelIds[0] || 'YourModel'
+  const defaultModelMode = runtimeStatus?.default_model_mode || 'chat'
+  const embeddingModelId = configuredModelIds.find((id) => /embed/i.test(id)) || 'YourEmbeddingModel'
+  const chatExample = defaultModelMode === 'completion'
+    ? `curl ${apiBaseUrl}/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"${defaultModelId}","prompt":"Write a short function that adds two numbers."}'`
+    : `curl ${apiBaseUrl}/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"${defaultModelId}","messages":[{"role":"user","content":"hi"}]}'`
+  const visionExample = `curl ${apiBaseUrl}/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"${defaultModelId}","messages":[{"role":"user","content":[{"type":"text","text":"Describe this image."},{"type":"image_url","image_url":{"url":"https://example.com/image.jpg"}}]}]}'`
+  const completionExample = `curl ${apiBaseUrl}/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"YourCompletionModel","prompt":"Complete this code:\\nfunction add(a, b) {"}'`
+  const embeddingsExample = `curl ${apiBaseUrl}/embeddings \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"${embeddingModelId}","input":"Local AI is useful for private workflows."}'`
+  const statusExample = `curl ${adminBaseUrl}/status`
+  const settingsExample = `curl ${adminBaseUrl}/settings`
+  const configExample = `curl ${adminBaseUrl}/config`
+  const updatesExample = `curl ${adminBaseUrl}/updates?refresh=true`
+  const runtimeModelsExample = `curl ${adminBaseUrl}/runtime/models`
+  const startRuntimeExample = `curl -X POST ${adminBaseUrl}/service/start`
+  const stopRuntimeExample = `curl -X POST ${adminBaseUrl}/service/stop`
+  const testExample = `curl -X POST ${adminBaseUrl}/test \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"${defaultModelId}","prompt":"Reply with exactly: ok"}'`
+  const dockerLogsExample = `curl ${adminBaseUrl}/logs/docker/runtime`
+  const healthExample = `curl ${healthUrl}`
 
   const fields = [
     { key: 'gguf_directory', label: 'GGUF Model Directory', type: 'text', description: 'Where .gguf model files are stored' },
@@ -131,6 +177,33 @@ function SettingsPage() {
             />
           </label>
         )}
+
+        <div className="mt-4 rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)' }}>
+          <div className="font-medium mb-1">Runtime GPU Detection</div>
+          {detectedGpus.length > 0 ? (
+            <div className="space-y-2 text-sm" style={{ color: 'var(--text-muted)' }}>
+              <p>Ignite can see these GPUs directly, so Advanced GPU Mode can pin models to a specific device.</p>
+              {detectedGpus.map((gpu) => (
+                <div key={gpu.uuid || gpu.index} className="rounded-lg border p-3 font-mono" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
+                  GPU {gpu.index}: {gpu.name} · {gpu.memory_total_gb} GiB · {gpu.uuid}
+                </div>
+              ))}
+            </div>
+          ) : hasFallbackOnlyGpu ? (
+            <div className="text-sm">
+              <p style={{ color: '#fde68a' }}>
+                Ignite can tell that a GPU exists, but direct GPU enumeration failed. Config will fall back to `Any Visible GPU` until the stack is recreated cleanly.
+              </p>
+              <p className="mt-2" style={{ color: 'var(--text-muted)' }}>
+                This usually means `nvidia-smi` failed inside the Ignite container after a reboot or Docker restart.
+              </p>
+            </div>
+          ) : (
+            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+              No directly detectable GPUs are available to Ignite right now.
+            </p>
+          )}
+        </div>
       </div>
 
       {meta?.managed_runtime && (
@@ -189,6 +262,222 @@ LLAMA_SWAP_PORT=8090`}
           </div>
         </div>
       )}
+
+      {meta?.managed_runtime && (
+        <div className="card mb-6">
+          <h3 className="text-lg font-semibold mb-3">Endpoint Reference</h3>
+          <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+            Use the local OpenAI-compatible endpoint below for curl, scripts, and external apps running on this machine.
+          </p>
+
+          <div className="space-y-3">
+            <div className="rounded-lg border p-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">Base URL</div>
+                  <div className="font-mono text-sm mt-1">{apiBaseUrl}</div>
+                </div>
+                <button onClick={() => copyText('settings-base-url', apiBaseUrl)} className="btn btn-secondary text-sm">
+                  {copiedField === 'settings-base-url' ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Available endpoints</div>
+              <div className="space-y-2 font-mono" style={{ color: 'var(--text-muted)' }}>
+                <div>GET {modelsUrl}</div>
+                <div>POST {apiBaseUrl}/chat/completions</div>
+                <div>POST {apiBaseUrl}/completions</div>
+                <div>POST {apiBaseUrl}/embeddings</div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Curl: List Models</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+                {`curl ${modelsUrl}`}
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Curl: Chat</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+                {chatExample}
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Curl: Vision Chat</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+                {visionExample}
+              </div>
+              <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+                Use this only with a vision-capable chat model.
+              </p>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Curl: Completion</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+                {completionExample}
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Curl: Embeddings</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+                {embeddingsExample}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="card mb-6">
+        <h3 className="text-lg font-semibold mb-3">Ignite Admin API</h3>
+        <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+          These endpoints manage Ignite itself: runtime status, config, logs, updates, and test requests. Use them for automation or debugging, not for normal app chat traffic.
+        </p>
+
+        <div className="space-y-3">
+          <div className="rounded-lg border p-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium">Admin Base URL</div>
+                <div className="font-mono text-sm mt-1">{adminBaseUrl}</div>
+              </div>
+              <button onClick={() => copyText('settings-admin-base-url', adminBaseUrl)} className="btn btn-secondary text-sm">
+                {copiedField === 'settings-admin-base-url' ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+            <div className="font-medium mb-2">Available endpoints</div>
+            <div className="space-y-2 font-mono" style={{ color: 'var(--text-muted)' }}>
+              <div>GET {adminBaseUrl}/status</div>
+              <div>GET {adminBaseUrl}/settings</div>
+              <div>PUT {adminBaseUrl}/settings</div>
+              <div>GET {adminBaseUrl}/config</div>
+              <div>PUT {adminBaseUrl}/config</div>
+              <div>GET {adminBaseUrl}/config/raw</div>
+              <div>PUT {adminBaseUrl}/config/raw</div>
+              <div>GET {adminBaseUrl}/config/guide</div>
+              <div>GET {adminBaseUrl}/updates?refresh=true</div>
+              <div>GET {adminBaseUrl}/runtime/models</div>
+              <div>GET {adminBaseUrl}/runtime/overview</div>
+              <div>POST {adminBaseUrl}/runtime/models/load/{'{model_id}'}</div>
+              <div>POST {adminBaseUrl}/runtime/models/unload/{'{model_id}'}</div>
+              <div>POST {adminBaseUrl}/runtime/models/unload</div>
+              <div>POST {adminBaseUrl}/service/start</div>
+              <div>POST {adminBaseUrl}/service/stop</div>
+              <div>GET {adminBaseUrl}/logs</div>
+              <div>GET {adminBaseUrl}/logs/upstream</div>
+              <div>GET {adminBaseUrl}/logs/docker/{'{stream_name}'}</div>
+              <div>GET {adminBaseUrl}/logs/events</div>
+              <div>POST {adminBaseUrl}/test</div>
+              <div>GET {healthUrl}</div>
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Core state</div>
+              <div className="space-y-2" style={{ color: 'var(--text-muted)' }}>
+                <div><span className="font-mono">GET /api/status</span> returns runtime, GPU, and configured model state.</div>
+                <div><span className="font-mono">GET /api/settings</span> returns current Ignite settings.</div>
+                <div><span className="font-mono">GET /api/config</span> returns the parsed llama-swap config.</div>
+                <div><span className="font-mono">GET /api/config/raw</span> returns the raw YAML config text.</div>
+                <div><span className="font-mono">GET /api/updates</span> checks runtime versions and upstream availability.</div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Runtime control</div>
+              <div className="space-y-2" style={{ color: 'var(--text-muted)' }}>
+                <div><span className="font-mono">GET /api/runtime/models</span> lists models seen by the running runtime.</div>
+                <div><span className="font-mono">POST /api/service/start</span> starts the managed runtime.</div>
+                <div><span className="font-mono">POST /api/service/stop</span> stops the managed runtime.</div>
+                <div><span className="font-mono">GET /api/logs/docker/runtime</span> reads Docker runtime logs.</div>
+                <div><span className="font-mono">POST /api/test</span> sends a test request through Ignite.</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+            <div className="font-medium mb-2">Curl: Status</div>
+            <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+              {statusExample}
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Curl: Settings</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+                {settingsExample}
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Curl: Config</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+                {configExample}
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Curl: Updates</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+                {updatesExample}
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Curl: Runtime Models</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+                {runtimeModelsExample}
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Curl: Start Runtime</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+                {startRuntimeExample}
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Curl: Stop Runtime</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+                {stopRuntimeExample}
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Curl: Test Request</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+                {testExample}
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="font-medium mb-2">Curl: Runtime Logs</div>
+              <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+                {dockerLogsExample}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
+            <div className="font-medium mb-2">Curl: Health</div>
+            <div className="font-mono whitespace-pre-wrap" style={{ color: 'var(--text-muted)' }}>
+              {healthExample}
+            </div>
+          </div>
+        </div>
+      </div>
 
       {message && (
         <div className={`mb-4 px-4 py-2 rounded-lg text-sm border ${
