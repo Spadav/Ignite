@@ -14,12 +14,14 @@ function StatusPage() {
     dockerControlWarning,
     runtimeMode,
     llamaSwapPort,
+    speachesPort,
     configExists,
     configPath,
     configuredModelCount,
     configuredModelIds,
     defaultModelId,
     defaultModelMode,
+    speech,
     refreshStatus
   } = useServiceStatus(15000)
   const gpuStats = useGpuStats(15000)
@@ -128,7 +130,9 @@ function StatusPage() {
 
   const localApiBaseUrl = `${window.location.protocol}//127.0.0.1:${llamaSwapPort}/v1`
   const currentHostApiBaseUrl = `${window.location.protocol}//${window.location.hostname}:${llamaSwapPort}/v1`
+  const speechApiBaseUrl = `${window.location.protocol}//127.0.0.1:${speachesPort}/v1`
   const modelsUrl = `${localApiBaseUrl}/models`
+  const speechModelsUrl = `${speechApiBaseUrl}/models`
   const hasConfiguredModels = configuredModelCount > 0
   const sampleModelId = defaultModelId || configuredModelIds[0] || 'YourModel'
   const sampleEmbeddingModelId = configuredModelIds.find((id) => /embed/i.test(id)) || 'YourEmbeddingModel'
@@ -148,6 +152,13 @@ function StatusPage() {
   const sampleEmbeddingsRequest = `curl ${localApiBaseUrl}/embeddings \\
   -H "Content-Type: application/json" \\
   -d '{"model":"${sampleEmbeddingModelId}","input":"Local AI is useful for private workflows."}'`
+  const sampleSpeechRequest = `curl ${speechApiBaseUrl}/audio/speech \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"speaches-ai/Kokoro-82M-v1.0-ONNX","voice":"af_heart","input":"Hello from Ignite."}' \\
+  --output speech.mp3`
+  const sampleTranscriptionRequest = `curl ${speechApiBaseUrl}/audio/transcriptions \\
+  -F "model=Systran/faster-distil-whisper-small.en" \\
+  -F "file=@sample.wav"`
 
   const formatGiB = (value) => Number(value || 0).toFixed(1).replace(/\.0$/, '')
   const activeModels = runtimeModels.filter((model) => model.state && model.state !== 'stopped')
@@ -252,6 +263,29 @@ function StatusPage() {
           </p>
         </div>
 
+        <div className="card" style={{ padding: '1rem' }}>
+          <h3 className="text-base font-semibold mb-2">Speech Service</h3>
+          <div className="flex items-center gap-2">
+            <span className={`w-3 h-3 rounded-full ${speech?.reachable ? 'bg-green-500' : 'bg-amber-500'}`}></span>
+            <span className="text-lg font-semibold">{speech?.reachable ? 'Ready' : 'Offline'}</span>
+          </div>
+          <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
+            {speech?.reachable
+              ? `Speaches is reachable at ${speechApiBaseUrl}.`
+              : (speech?.error || 'Speaches is not reachable right now.')}
+          </p>
+          {speech?.details?.sample_rate && (
+            <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
+              Sample rate: {speech.details.sample_rate} Hz
+            </p>
+          )}
+          {speech?.reachable && typeof speech?.details?.model_count === 'number' && (
+            <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
+              Installed speech models: {speech.details.model_count}
+            </p>
+          )}
+        </div>
+
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
           {gpuStats.gpus.map((gpu) => (
             <div
@@ -299,6 +333,20 @@ function StatusPage() {
                 </div>
               </div>
 
+              {speech?.enabled && (
+                <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium">Speech Base URL</div>
+                      <div className="font-mono text-sm mt-1">{speechApiBaseUrl}</div>
+                    </div>
+                    <button onClick={() => copyText('speech-base', speechApiBaseUrl)} className="btn btn-secondary text-sm">
+                      {copiedField === 'speech-base' ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {currentHostApiBaseUrl !== localApiBaseUrl && (
                 <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
                   <div className="flex items-center justify-between gap-3">
@@ -324,6 +372,20 @@ function StatusPage() {
                   </button>
                 </div>
               </div>
+
+              {speech?.enabled && (
+                <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium">Speech Models URL</div>
+                      <div className="font-mono text-sm mt-1">{speechModelsUrl}</div>
+                    </div>
+                    <button onClick={() => copyText('speech-models', speechModelsUrl)} className="btn btn-secondary text-sm">
+                      {copiedField === 'speech-models' ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="rounded-lg border p-2.5 text-sm" style={{ borderColor: 'var(--line-soft)' }}>
                 <div className="font-medium mb-2">Quick checks</div>
@@ -415,6 +477,46 @@ ${sampleRequest}`
                       {sampleEmbeddingsRequest}
                     </div>
                   </div>
+
+                  {speech?.enabled && (
+                    <>
+                      <div>
+                        <div className="flex items-center justify-between gap-3 mb-1">
+                          <div className="text-sm font-medium">Speech Voices / Models</div>
+                          <button onClick={() => copyText('curl-speech-models', `curl ${speechModelsUrl}`)} className="btn btn-secondary text-sm">
+                            {copiedField === 'curl-speech-models' ? 'Copied' : 'Copy'}
+                          </button>
+                        </div>
+                        <div className="font-mono whitespace-pre-wrap text-sm" style={{ color: 'var(--text-muted)' }}>
+                          {`curl ${speechModelsUrl}`}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between gap-3 mb-1">
+                          <div className="text-sm font-medium">Text To Speech</div>
+                          <button onClick={() => copyText('curl-speech', sampleSpeechRequest)} className="btn btn-secondary text-sm">
+                            {copiedField === 'curl-speech' ? 'Copied' : 'Copy'}
+                          </button>
+                        </div>
+                        <div className="font-mono whitespace-pre-wrap text-sm" style={{ color: 'var(--text-muted)' }}>
+                          {sampleSpeechRequest}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between gap-3 mb-1">
+                          <div className="text-sm font-medium">Speech To Text</div>
+                          <button onClick={() => copyText('curl-transcription', sampleTranscriptionRequest)} className="btn btn-secondary text-sm">
+                            {copiedField === 'curl-transcription' ? 'Copied' : 'Copy'}
+                          </button>
+                        </div>
+                        <div className="font-mono whitespace-pre-wrap text-sm" style={{ color: 'var(--text-muted)' }}>
+                          {sampleTranscriptionRequest}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             </div>

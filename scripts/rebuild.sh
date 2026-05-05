@@ -16,5 +16,6 @@ print_step "3/3" "Rebuilding and recreating Ignite"
 )
 
 printf 'llama-swap API: http://127.0.0.1:%s/v1\n' "$LLAMA_SWAP_PORT"
+printf 'Speaches API:  http://127.0.0.1:%s/v1\n' "$SPEACHES_PORT"
 printf 'Ignite UI: http://127.0.0.1:%s\n' "$IGNITE_PORT"
 printf 'Stop later with: ./scripts/stop.sh\n'

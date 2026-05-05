@@ -29,7 +29,7 @@ function App() {
     { label: 'Discover', path: '/discover' },
     { label: 'Config', path: '/config' },
     { label: 'Models', path: '/models' },
-    { label: 'Test', path: '/test' },
+    { label: 'Playground', path: '/playground' },
     { label: 'Logs', path: '/logs' },
     { label: 'Updates', path: '/updates' },
     { label: 'Settings', path: '/settings' },

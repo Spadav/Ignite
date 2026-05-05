@@ -8,7 +8,7 @@ const USE_CASES = [
 ]
 
 const SETUP_STATE_KEY = 'ignite_onboarding_complete_v1'
-const TEST_STATE_KEY = 'ignite_test_state_v1'
+const TEST_STATE_KEY = 'ignite_test_state_v2'
 
 function getLastTestState() {
   try {
@@ -163,9 +163,9 @@ function SetupPage() {
       done: lastTestPassed,
       description: lastTestPassed
         ? `Last successful test used ${lastTestState.model || 'a configured model'}.`
-        : 'Use Test after adding a model to confirm the runtime and prompt mode behave as expected.',
-      action: () => navigate('/test'),
-      actionLabel: 'Open Test',
+        : 'Use Playground after adding a model to confirm the runtime and prompt mode behave as expected.',
+      action: () => navigate('/playground'),
+      actionLabel: 'Open Playground',
     },
   ]
 
@@ -247,10 +247,10 @@ function SetupPage() {
     }
   } else if (!lastTestPassed) {
     nextAction = {
-      title: 'Run First Test',
+      title: 'Run First Check',
       description: 'Verify the configured model responds correctly before connecting other apps.',
-      label: 'Open Test',
-      onClick: () => navigate('/test'),
+      label: 'Open Playground',
+      onClick: () => navigate('/playground'),
     }
   }
 
@@ -402,6 +402,25 @@ function SetupPage() {
               ) : (
                 <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No recommendation available.</p>
               )}
+            </div>
+
+            <div className="card">
+              <h3 className="text-lg font-semibold mb-3">Speech Mode</h3>
+              <div className="space-y-3 text-sm">
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Current:</span>{' '}
+                  <span className="font-mono">{status?.speech?.accel || 'unknown'}</span>
+                </div>
+                <div style={{ color: 'var(--text-muted)' }}>
+                  CPU is safest. CUDA is faster, but depends on working NVIDIA Docker support.
+                </div>
+                <button
+                  onClick={() => navigate('/settings')}
+                  className="btn btn-secondary text-sm"
+                >
+                  Open Settings
+                </button>
+              </div>
             </div>
           </div>
 

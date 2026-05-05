@@ -36,6 +36,9 @@ function ModelsPage() {
   const [lastDownloadedModel, setLastDownloadedModel] = useState('')
   const [presetPicker, setPresetPicker] = useState(null)
   const [presetLoading, setPresetLoading] = useState(false)
+  const [speechModels, setSpeechModels] = useState([])
+  const [speechLoading, setSpeechLoading] = useState(true)
+  const [speechError, setSpeechError] = useState('')
 
   const handleDelete = async (filename) => {
     if (!confirm(`Delete ${filename}?`)) return
@@ -179,16 +182,36 @@ function ModelsPage() {
     fetchRepoFiles(repoFromQuery)
   }, [searchParams, autoLoadedRepo])
 
+  const refreshSpeechModels = async () => {
+    try {
+      setSpeechLoading(true)
+      setSpeechError('')
+      const response = await fetch('/api/speech/models')
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || 'Failed to load installed speech models')
+      setSpeechModels(Array.isArray(data.data) ? data.data : [])
+    } catch (error) {
+      setSpeechModels([])
+      setSpeechError(error.message || 'Failed to load installed speech models')
+    } finally {
+      setSpeechLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    refreshSpeechModels()
+  }, [])
+
   const handleRepoDownload = async () => {
     const file = repoFiles.find(f => f.path === selectedFilePath)
     if (!file) return
     await startDownload(file.download_url, file.filename)
   }
 
-  const handleGoToTest = (modelId) => {
+  const handleGoToPlayground = (modelId) => {
     const params = new URLSearchParams()
     if (modelId) params.set('model', modelId)
-    navigate(`/test${params.toString() ? `?${params.toString()}` : ''}`)
+    navigate(`/playground${params.toString() ? `?${params.toString()}` : ''}`)
   }
 
   return (
@@ -391,7 +414,7 @@ function ModelsPage() {
               <div>
                 <p className="font-medium">Downloaded: {lastDownloadedModel}</p>
                 <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                  Next step: add it to the llama-swap config, then open Test.
+                  Next step: add it to the llama-swap config, then open Playground.
                 </p>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
@@ -403,10 +426,10 @@ function ModelsPage() {
                   {presetLoading ? 'Loading presets...' : configuringModel === lastDownloadedModel ? 'Adding...' : 'Choose Launch Profile'}
                 </button>
                 <button
-                  onClick={() => handleGoToTest(configMessage?.modelId || '')}
+                  onClick={() => handleGoToPlayground(configMessage?.modelId || '')}
                   className="btn btn-secondary text-sm"
                 >
-                  Go to Test
+                  Go to Playground
                 </button>
               </div>
             </div>
@@ -417,16 +440,21 @@ function ModelsPage() {
       <div className="card">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold">Installed Models</h3>
-          <button onClick={refreshModels} className="btn btn-secondary text-sm">
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={refreshModels} className="btn btn-secondary text-sm">
+              Refresh LLM
+            </button>
+            <button onClick={refreshSpeechModels} className="btn btn-secondary text-sm">
+              Refresh Speech
+            </button>
+          </div>
         </div>
         
         {loading ? (
           <p style={{ color: 'var(--text-muted)' }}>Loading...</p>
         ) : error ? (
           <p className="text-red-500">Error: {error}</p>
-        ) : models.length === 0 ? (
+        ) : models.length === 0 && !speechLoading && speechModels.length === 0 ? (
           <p style={{ color: 'var(--text-muted)' }}>No models installed</p>
         ) : (
           <div className="space-y-2">
@@ -441,44 +469,90 @@ function ModelsPage() {
                   <span>{configMessage.text}</span>
                   {configMessage.type === 'success' && configMessage.modelId && (
                     <button
-                      onClick={() => handleGoToTest(configMessage.modelId)}
+                      onClick={() => handleGoToPlayground(configMessage.modelId)}
                       className="btn btn-secondary text-sm"
                     >
-                      Open in Test
+                      Open in Playground
                     </button>
                   )}
                 </div>
               </div>
             )}
-            {models.map((model) => (
-              <div
-                key={model.filename}
-                className="flex items-center justify-between gap-3 p-3 rounded-lg border"
-                style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}
-              >
-                <div>
-                  <p className="font-medium">{model.filename}</p>
-                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                    {model.size_gb} GiB • {formatDate(model.modified)}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleAddToConfig(model.filename)}
-                    disabled={configuringModel === model.filename || presetLoading}
-                    className="btn btn-secondary text-sm"
-                  >
-                    {presetLoading ? 'Loading presets...' : configuringModel === model.filename ? 'Adding...' : 'Add to Config'}
-                  </button>
-                  <button
-                    onClick={() => handleDelete(model.filename)}
-                    className="btn btn-danger text-sm"
-                  >
-                    Delete
-                  </button>
-                </div>
+            <div className="rounded-lg border p-4 mb-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.06)' }}>
+              <div>
+                <h4 className="font-semibold">Installed Speech Models</h4>
+                <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
+                  STT and TTS models available through Speaches.
+                </p>
               </div>
-            ))}
+              {speechLoading ? (
+                <p className="mt-3" style={{ color: 'var(--text-muted)' }}>Loading speech models...</p>
+              ) : speechError ? (
+                <p className="mt-3 text-red-500 text-sm">{speechError}</p>
+              ) : speechModels.length === 0 ? (
+                <p className="mt-3" style={{ color: 'var(--text-muted)' }}>No speech models installed</p>
+              ) : (
+                <div className="space-y-2 mt-3">
+                  {speechModels.map((speechModel) => (
+                    <div
+                      key={speechModel.id}
+                      className="flex items-center justify-between gap-3 p-3 rounded-lg border"
+                      style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}
+                    >
+                      <div>
+                        <p className="font-medium break-all">{speechModel.id}</p>
+                        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                          {(speechModel.task || 'speech').replaceAll('-', ' ')}
+                          {speechModel.sample_rate ? ` • ${speechModel.sample_rate} Hz` : ''}
+                          {Array.isArray(speechModel.voices) ? ` • ${speechModel.voices.length} voices` : ''}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => navigate('/playground?speech=1')}
+                        className="btn btn-secondary text-sm"
+                      >
+                        Open in Playground
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {models.length === 0 ? (
+              <div className="rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--line-soft)', color: 'var(--text-muted)' }}>
+                No GGUF models installed.
+              </div>
+            ) : (
+              models.map((model) => (
+                <div
+                  key={model.filename}
+                  className="flex items-center justify-between gap-3 p-3 rounded-lg border"
+                  style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}
+                >
+                  <div>
+                    <p className="font-medium">{model.filename}</p>
+                    <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                      {model.size_gb} GiB • {formatDate(model.modified)}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleAddToConfig(model.filename)}
+                      disabled={configuringModel === model.filename || presetLoading}
+                      className="btn btn-secondary text-sm"
+                    >
+                      {presetLoading ? 'Loading presets...' : configuringModel === model.filename ? 'Adding...' : 'Add to Config'}
+                    </button>
+                    <button
+                      onClick={() => handleDelete(model.filename)}
+                      className="btn btn-danger text-sm"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         )}
       </div>

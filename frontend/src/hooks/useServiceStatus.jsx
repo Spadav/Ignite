@@ -10,12 +10,14 @@ export function useServiceStatus(pollMs = 10000) {
     runtimeMode: 'local',
     backendPort: 3000,
     llamaSwapPort: 8090,
+    speachesPort: 8000,
     configExists: false,
     configPath: '',
     configuredModelCount: 0,
     configuredModelIds: [],
     defaultModelId: '',
     defaultModelMode: 'chat',
+    speech: null,
   })
 
   const refreshStatus = async () => {
@@ -32,12 +34,14 @@ export function useServiceStatus(pollMs = 10000) {
           runtimeMode: data.runtime_mode || 'local',
           backendPort: Number(data.backend_port || 3000),
           llamaSwapPort: Number(data.llama_swap_port || 8090),
+          speachesPort: Number(data.speaches_port || 8000),
           configExists: Boolean(data.config_exists),
           configPath: data.config_path || '',
           configuredModelCount: Number(data.configured_model_count || 0),
           configuredModelIds: Array.isArray(data.configured_model_ids) ? data.configured_model_ids : [],
           defaultModelId: data.default_model_id || '',
           defaultModelMode: data.default_model_mode || 'chat',
+          speech: data.speech || null,
         })
     } catch (error) {
         setStatus({
@@ -49,12 +53,14 @@ export function useServiceStatus(pollMs = 10000) {
           runtimeMode: 'local',
           backendPort: 3000,
           llamaSwapPort: 8090,
+          speachesPort: 8000,
           configExists: false,
           configPath: '',
           configuredModelCount: 0,
           configuredModelIds: [],
           defaultModelId: '',
           defaultModelMode: 'chat',
+          speech: null,
         })
     }
   }

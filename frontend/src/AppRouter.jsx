@@ -32,7 +32,8 @@ function AppWithRouter() {
           <Route path="runtime" element={<RuntimePage />} />
           <Route path="logs" element={<LogsPage />} />
           <Route path="updates" element={<UpdatesPage />} />
-          <Route path="test" element={<TestPage />} />
+          <Route path="playground" element={<TestPage />} />
+          <Route path="test" element={<Navigate to="/playground" replace />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Routes>

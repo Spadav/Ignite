@@ -6,7 +6,10 @@ CONFIG_DIR="${IGNITE_CONFIG_DIR:-${SWAPDECK_CONFIG_DIR:-$ROOT_DIR/config}}"
 MODELS_DIR="${IGNITE_MODELS_DIR:-${SWAPDECK_MODELS_DIR:-$ROOT_DIR/models}}"
 IGNITE_PORT="${IGNITE_PORT:-3000}"
 LLAMA_SWAP_PORT="${LLAMA_SWAP_PORT:-8090}"
+SPEACHES_PORT="${SPEACHES_PORT:-8000}"
+SPEACHES_ACCEL="${SPEACHES_ACCEL:-cpu}"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
+SPEACHES_CUDA_COMPOSE_FILE="$ROOT_DIR/docker-compose.speaches-cuda.yml"
 
 print_step() {
   printf '\n[%s] %s\n' "$1" "$2"
@@ -26,7 +29,11 @@ ensure_command() {
 }
 
 docker_compose() {
-  docker compose "$@"
+  local compose_args=("-f" "$COMPOSE_FILE")
+  if [[ "${SPEACHES_ACCEL}" == "cuda" ]]; then
+    compose_args+=("-f" "$SPEACHES_CUDA_COMPOSE_FILE")
+  fi
+  docker compose "${compose_args[@]}" "$@"
 }
 
 ensure_supported_platform() {
@@ -58,4 +65,6 @@ print_paths() {
   printf 'Models:  %s\n' "$MODELS_DIR"
   printf 'UI Port:  %s\n' "$IGNITE_PORT"
   printf 'API Port: %s\n' "$LLAMA_SWAP_PORT"
+  printf 'Speech:   %s\n' "$SPEACHES_PORT"
+  printf 'Speech Accel: %s\n' "$SPEACHES_ACCEL"
 }

@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 import yaml
 import requests
 import docker
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, UploadFile, File, Form, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -93,10 +93,12 @@ LOCAL_DEFAULT_SETTINGS = {
     "backend_port": 8091,
     "advanced_gpu_mode": False,
     "restart_on_boot": False,
+    "speaches_accel": os.environ.get("SPEACHES_ACCEL", "cpu").strip().lower() or "cpu",
 }
 
 DOCKER_IGNITE_PORT = int(os.environ.get("IGNITE_PORT", "3000"))
 DOCKER_LLAMA_SWAP_PORT = int(os.environ.get("LLAMA_SWAP_PORT", "8090"))
+DOCKER_SPEACHES_PORT = int(os.environ.get("SPEACHES_PORT", "8000"))
 
 DOCKER_DEFAULT_SETTINGS = {
     "gguf_directory": "/models",
@@ -106,12 +108,17 @@ DOCKER_DEFAULT_SETTINGS = {
     "backend_port": DOCKER_IGNITE_PORT,
     "advanced_gpu_mode": False,
     "restart_on_boot": False,
+    "speaches_accel": os.environ.get("SPEACHES_ACCEL", "cpu").strip().lower() or "cpu",
 }
 
 DEFAULT_SETTINGS = DOCKER_DEFAULT_SETTINGS if IS_DOCKER else LOCAL_DEFAULT_SETTINGS
 DOCKER_SOCKET_PATH = "/var/run/docker.sock"
 DOCKER_RUNTIME_CONTAINER = os.environ.get("IGNITE_RUNTIME_CONTAINER", "llama-runtime")
-DOCKER_SUPPORT_CONTAINERS = [name for name in [os.environ.get("IGNITE_LLMFIT_CONTAINER", "llmfit")] if name]
+DOCKER_LLMFIT_CONTAINER = os.environ.get("IGNITE_LLMFIT_CONTAINER", "llmfit")
+DOCKER_SPEACHES_CONTAINER = os.environ.get("IGNITE_SPEACHES_CONTAINER", "speaches")
+DOCKER_SUPPORT_CONTAINERS = [
+    name for name in [DOCKER_LLMFIT_CONTAINER, DOCKER_SPEACHES_CONTAINER] if name
+]
 DOCKER_CONTROL_WARNING = (
     "Ignite runtime controls use the host Docker socket. That gives this container control over "
     "other Docker containers on this machine."
@@ -155,7 +162,8 @@ def get_docker_log_container_map() -> Dict[str, str]:
     return {
         "ignite": "ignite",
         "runtime": DOCKER_RUNTIME_CONTAINER,
-        "llmfit": DOCKER_SUPPORT_CONTAINERS[0] if DOCKER_SUPPORT_CONTAINERS else "llmfit",
+        "llmfit": DOCKER_LLMFIT_CONTAINER,
+        "speaches": DOCKER_SPEACHES_CONTAINER,
     }
 
 
@@ -270,6 +278,298 @@ def get_llmfit_base_url() -> Optional[str]:
     if IS_DOCKER:
         return "http://llmfit:8787"
     return None
+
+
+def get_speaches_base_url() -> Optional[str]:
+    configured = os.environ.get("SPEACHES_URL", "").strip()
+    if configured:
+        return configured.rstrip("/")
+    if IS_DOCKER:
+        return "http://speaches:8000"
+    return None
+
+
+def get_speaches_status() -> Dict[str, Any]:
+    base_url = get_speaches_base_url()
+    host_port = int(os.environ.get("SPEACHES_PORT", str(DOCKER_SPEACHES_PORT)))
+    accel_info = get_speaches_runtime_info()
+
+    status = {
+        "enabled": bool(base_url),
+        "reachable": False,
+        "base_url": base_url,
+        "port": host_port,
+        "health_url": f"{base_url}/health" if base_url else "",
+        "api_base_url": f"http://127.0.0.1:{host_port}/v1",
+        "details": None,
+        "error": "",
+        "accel": accel_info.get("accel"),
+        "image": accel_info.get("image"),
+    }
+
+    if not base_url:
+        status["error"] = "Speech service is not configured."
+        return status
+
+    try:
+        response = requests.get(f"{base_url}/health", timeout=5)
+        if response.status_code != 200:
+            status["error"] = f"Health check returned HTTP {response.status_code}"
+            return status
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {"status": response.text.strip() or "OK"}
+        try:
+            models_response = requests.get(f"{base_url}/v1/models", timeout=5)
+            if models_response.status_code == 200:
+                models_payload = models_response.json()
+                payload["model_count"] = len(models_payload.get("data") or [])
+        except Exception:
+            pass
+        status["reachable"] = True
+        status["details"] = payload
+        return status
+    except Exception as exc:
+        status["error"] = str(exc)
+        return status
+
+
+def require_speaches_base_url() -> str:
+    base_url = get_speaches_base_url()
+    if not base_url:
+        raise HTTPException(status_code=503, detail="Speech service is not configured.")
+    return base_url
+
+
+def request_speaches_json(
+    path: str,
+    *,
+    method: str = "GET",
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
+    timeout: int = 30,
+) -> Any:
+    base_url = require_speaches_base_url()
+    try:
+        response = requests.request(
+            method,
+            f"{base_url}{path}",
+            params=params,
+            json=json_body,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Speech service request failed: {exc}")
+
+    if response.status_code >= 400:
+        detail = response.text.strip() or f"Speech service returned HTTP {response.status_code}"
+        raise HTTPException(status_code=response.status_code, detail=detail[:500])
+
+    if not response.content:
+        return {"ok": True, "status_code": response.status_code}
+
+    try:
+        return response.json()
+    except Exception:
+        text = response.text.strip()
+        if text:
+            return {"ok": True, "message": text, "status_code": response.status_code}
+        raise HTTPException(status_code=502, detail="Speech service returned an empty non-JSON response.")
+
+
+def get_speech_registry(task: str = "", search: str = "") -> Dict[str, Any]:
+    payload = request_speaches_json("/v1/registry", timeout=60)
+    models = payload.get("data") or []
+
+    normalized_task = task.strip().lower()
+    normalized_search = search.strip().lower()
+
+    def matches(model: Dict[str, Any]) -> bool:
+        model_task = str(model.get("task") or "").strip().lower()
+        model_id = str(model.get("id") or "")
+        if normalized_task and model_task != normalized_task:
+            return False
+        if normalized_search and normalized_search not in model_id.lower():
+            return False
+        return True
+
+    filtered = [model for model in models if matches(model)]
+    return {
+        "data": filtered,
+        "object": payload.get("object", "list"),
+        "count": len(filtered),
+        "available_tasks": sorted({str(model.get("task") or "") for model in models if model.get("task")}),
+    }
+
+
+def get_installed_speech_models() -> Dict[str, Any]:
+    payload = request_speaches_json("/v1/models", timeout=30)
+    return {
+        "data": payload.get("data") or [],
+        "object": payload.get("object", "list"),
+        "count": len(payload.get("data") or []),
+    }
+
+
+def get_speech_voices(model: str = "") -> Dict[str, Any]:
+    params = {"model": model} if model.strip() else None
+    payload = request_speaches_json("/v1/audio/voices", params=params, timeout=30)
+    if isinstance(payload, dict):
+        return payload
+    return {"voices": payload}
+
+
+def install_speech_model(model_id: str) -> Dict[str, Any]:
+    if not model_id.strip():
+        raise HTTPException(status_code=400, detail="Model id is required.")
+    return request_speaches_json(
+        f"/v1/models/{quote(model_id.strip(), safe='')}",
+        method="POST",
+        timeout=600,
+    )
+
+
+def get_speaches_runtime_info() -> Dict[str, Any]:
+    desired = str(settings.get("speaches_accel") or os.environ.get("SPEACHES_ACCEL") or "cpu").strip().lower()
+    if desired not in {"cpu", "cuda"}:
+        desired = "cpu"
+
+    info = {
+        "desired": desired,
+        "accel": desired,
+        "image": "",
+        "container_present": False,
+    }
+
+    client = get_docker_client()
+    if client is None:
+        return info
+
+    try:
+        container = client.containers.get(DOCKER_SPEACHES_CONTAINER)
+    except Exception:
+        return info
+
+    image = (
+        container.attrs.get("Config", {}).get("Image")
+        or (container.image.tags[0] if container.image.tags else "")
+    )
+    accel = "cuda" if "cuda" in image.lower() else "cpu"
+    info.update({
+        "accel": accel,
+        "image": image,
+        "container_present": True,
+    })
+    return info
+
+
+def recreate_speaches_container(accel: str) -> Dict[str, Any]:
+    if accel not in {"cpu", "cuda"}:
+        raise HTTPException(status_code=400, detail="Speech acceleration must be 'cpu' or 'cuda'.")
+
+    client = get_docker_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Docker runtime control is not available.")
+
+    image = f"ghcr.io/speaches-ai/speaches:latest-{accel}"
+
+    try:
+        client.images.pull(image)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to pull speech image {image}: {exc}")
+
+    try:
+        existing = client.containers.get(DOCKER_SPEACHES_CONTAINER)
+    except Exception:
+        existing = None
+
+    network_names: List[str] = []
+    ports: Dict[str, Any] = {"8000/tcp": int(os.environ.get("SPEACHES_PORT", str(DOCKER_SPEACHES_PORT)))}
+    volumes: Dict[str, Dict[str, str]] = {"speaches-hf-cache": {"bind": "/home/ubuntu/.cache/huggingface/hub", "mode": "rw"}}
+    restart_policy = {"Name": "no"}
+
+    if existing is not None:
+        attrs = existing.attrs
+        network_names = list((attrs.get("NetworkSettings", {}) or {}).get("Networks", {}).keys())
+        restart_policy = (attrs.get("HostConfig", {}) or {}).get("RestartPolicy") or {"Name": "no"}
+
+        mount_defs = {}
+        for mount in attrs.get("Mounts", []) or []:
+            mount_type = mount.get("Type")
+            destination = mount.get("Destination")
+            mode = mount.get("Mode") or "rw"
+            if mount_type == "volume":
+                mount_defs[mount.get("Name")] = {"bind": destination, "mode": mode}
+            elif mount_type == "bind":
+                mount_defs[mount.get("Source")] = {"bind": destination, "mode": mode}
+        if mount_defs:
+            volumes = mount_defs
+
+        port_bindings = (attrs.get("HostConfig", {}) or {}).get("PortBindings") or {}
+        if port_bindings:
+            normalized_ports: Dict[str, Any] = {}
+            for container_port, bindings in port_bindings.items():
+                if not bindings:
+                    continue
+                binding = bindings[0]
+                host_ip = binding.get("HostIp") or "0.0.0.0"
+                host_port = int(binding.get("HostPort") or os.environ.get("SPEACHES_PORT", str(DOCKER_SPEACHES_PORT)))
+                normalized_ports[container_port] = host_port if host_ip in {"0.0.0.0", ""} else (host_ip, host_port)
+            if normalized_ports:
+                ports = normalized_ports
+
+        try:
+            existing.stop(timeout=15)
+        except Exception:
+            pass
+        try:
+            existing.remove()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to remove existing speech container: {exc}")
+
+    if not network_names:
+        try:
+            network_names = [network.name for network in client.networks.list(names=["ignite_default"])]
+        except Exception:
+            network_names = []
+
+    environment = {}
+    device_requests = None
+    if accel == "cuda":
+        environment = {
+            "NVIDIA_VISIBLE_DEVICES": "all",
+            "NVIDIA_DRIVER_CAPABILITIES": "compute,utility",
+        }
+        device_requests = [docker.types.DeviceRequest(count=-1, capabilities=[["gpu"]])]
+
+    primary_network = network_names[0] if network_names else None
+
+    try:
+        container = client.containers.run(
+            image,
+            name=DOCKER_SPEACHES_CONTAINER,
+            detach=True,
+            ports=ports,
+            volumes=volumes,
+            environment=environment,
+            restart_policy=restart_policy,
+            network=primary_network,
+            device_requests=device_requests,
+        )
+        for extra_network in network_names[1:]:
+            try:
+                client.networks.get(extra_network).connect(container)
+            except Exception:
+                pass
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to start speech container: {exc}")
+
+    return {
+        "ok": True,
+        "accel": accel,
+        "image": image,
+    }
 
 
 def load_settings() -> Dict[str, Any]:
@@ -1556,6 +1856,12 @@ class TestPrompt(BaseModel):
     image_data_url: str = ""
 
 
+class SpeechSynthesisRequest(BaseModel):
+    model: str
+    input: str
+    voice: Optional[str] = None
+
+
 def sanitize_model_id(value: str) -> str:
     sanitized = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-")
     return sanitized or f"Model-{int(datetime.now().timestamp())}"
@@ -1929,6 +2235,87 @@ def api_runtime_models():
     return {"models": get_llama_swap_model_status()}
 
 
+@app.get("/api/speech/registry")
+def api_speech_registry(task: str = Query(""), search: str = Query("")):
+    """List downloadable speech models from the remote Speaches registry."""
+    return get_speech_registry(task=task, search=search)
+
+
+@app.get("/api/speech/models")
+def api_speech_models():
+    """List locally installed speech models."""
+    return get_installed_speech_models()
+
+
+@app.get("/api/speech/voices")
+def api_speech_voices(model: str = Query("")):
+    """List available voices from the speech service."""
+    return get_speech_voices(model=model)
+
+
+@app.post("/api/speech/models/install/{model_id:path}")
+def api_speech_model_install(model_id: str):
+    """Download or install a speech model through Speaches."""
+    return install_speech_model(model_id)
+
+
+@app.post("/api/speech/test/tts")
+def api_speech_test_tts(request: SpeechSynthesisRequest):
+    """Synthesize speech through Speaches and return audio bytes."""
+    base_url = require_speaches_base_url()
+    payload: Dict[str, Any] = {
+        "model": request.model,
+        "input": request.input,
+    }
+    if request.voice:
+        payload["voice"] = request.voice
+
+    try:
+        response = requests.post(
+            f"{base_url}/v1/audio/speech",
+            json=payload,
+            timeout=120,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Speech synthesis request failed: {exc}")
+
+    if response.status_code >= 400:
+        detail = response.text.strip() or f"Speech service returned HTTP {response.status_code}"
+        raise HTTPException(status_code=response.status_code, detail=detail[:500])
+
+    media_type = response.headers.get("content-type", "audio/mpeg")
+    return Response(content=response.content, media_type=media_type)
+
+
+@app.post("/api/speech/test/stt")
+async def api_speech_test_stt(
+    model: str = Form(...),
+    file: UploadFile = File(...),
+):
+    """Transcribe speech through Speaches and return JSON."""
+    base_url = require_speaches_base_url()
+
+    try:
+        file_bytes = await file.read()
+        response = requests.post(
+            f"{base_url}/v1/audio/transcriptions",
+            data={"model": model},
+            files={"file": (file.filename or "audio.wav", file_bytes, file.content_type or "application/octet-stream")},
+            timeout=300,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Speech transcription request failed: {exc}")
+
+    if response.status_code >= 400:
+        detail = response.text.strip() or f"Speech service returned HTTP {response.status_code}"
+        raise HTTPException(status_code=response.status_code, detail=detail[:500])
+
+    try:
+        return response.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Speech service returned invalid JSON: {exc}")
+
+
 @app.get("/api/runtime/overview")
 def api_runtime_overview():
     """Get model states, request metrics, and inflight count from llama-swap."""
@@ -1968,6 +2355,7 @@ def api_status():
     gpu_stats = get_runtime_gpu_stats()
     docker_gpu = get_docker_gpu_preflight()
     config_summary = get_config_summary()
+    speech_status = get_speaches_status()
     
     logger.info(f"Status: running={running}, pid={pid}, gpu={gpu_stats}, docker_gpu={docker_gpu.get('state')}")
     
@@ -1981,8 +2369,10 @@ def api_status():
         "runtime_mode": get_runtime_mode(),
         "backend_port": settings["backend_port"],
         "llama_swap_port": settings["llama_swap_port"],
+        "speaches_port": speech_status.get("port", DOCKER_SPEACHES_PORT),
         "config_path": settings["llama_swap_config"],
         "config_exists": Path(os.path.expanduser(settings["llama_swap_config"])).exists(),
+        "speech": speech_status,
         **config_summary,
     }
 
@@ -2211,6 +2601,8 @@ def api_get_settings():
                 "models_dir": os.environ.get("IGNITE_MODELS_DIR", os.environ.get("SWAPDECK_MODELS_DIR", "./models")),
                 "config_dir": os.environ.get("IGNITE_CONFIG_DIR", os.environ.get("SWAPDECK_CONFIG_DIR", "./config")),
             } if is_docker_managed_runtime() else None,
+            "speech_runtime": get_speaches_runtime_info() if is_docker_managed_runtime() else None,
+            "speech_accel_options": ["cpu", "cuda"] if is_docker_managed_runtime() else None,
         },
     }
 
@@ -2219,13 +2611,21 @@ def api_get_settings():
 def api_save_settings(new_settings: Dict[str, Any]):
     """Save settings to settings.json and update in-memory values"""
     global settings
+    requested_speaches_accel = None
     # Only allow known keys
     for key in DEFAULT_SETTINGS:
         if key in new_settings:
             settings[key] = new_settings[key]
     if is_docker_managed_runtime() and "restart_on_boot" in new_settings:
         apply_docker_restart_policy(bool(new_settings["restart_on_boot"]))
+    if is_docker_managed_runtime() and "speaches_accel" in new_settings:
+        requested_speaches_accel = str(new_settings["speaches_accel"] or "").strip().lower() or "cpu"
+        if requested_speaches_accel not in {"cpu", "cuda"}:
+            raise HTTPException(status_code=400, detail="Speech acceleration must be 'cpu' or 'cuda'.")
+        settings["speaches_accel"] = requested_speaches_accel
     save_settings(settings)
+    if requested_speaches_accel is not None:
+        recreate_speaches_container(requested_speaches_accel)
     return api_get_settings()
 
 

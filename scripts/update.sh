@@ -15,7 +15,7 @@ git -C "$ROOT_DIR" pull --ff-only
 print_step "4/4" "Refreshing runtime images and restarting Ignite"
 (
   cd "$ROOT_DIR"
-  docker_compose pull llmfit
+  docker_compose pull llmfit speaches
   docker_compose build --pull ignite llama-runtime
   docker_compose up -d
 )

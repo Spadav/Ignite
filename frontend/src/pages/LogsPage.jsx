@@ -9,6 +9,31 @@ function LogsPage() {
   const [dockerLogTab, setDockerLogTab] = useState('runtime')
   const [dockerLogs, setDockerLogs] = useState([])
   const [dockerLogError, setDockerLogError] = useState('')
+  const [showSpeachesTab, setShowSpeachesTab] = useState(false)
+
+  useEffect(() => {
+    if (runtimeMode !== 'docker') return
+
+    let cancelled = false
+
+    const checkSpeaches = async () => {
+      try {
+        const response = await fetch('/api/logs/docker/speaches?lines=1')
+        if (!cancelled) {
+          setShowSpeachesTab(response.ok)
+        }
+      } catch {
+        if (!cancelled) {
+          setShowSpeachesTab(false)
+        }
+      }
+    }
+
+    checkSpeaches()
+    return () => {
+      cancelled = true
+    }
+  }, [runtimeMode])
 
   useEffect(() => {
     const appendLog = (setter) => (event) => {
@@ -132,6 +157,14 @@ function LogsPage() {
               >
                 llmfit
               </button>
+              {showSpeachesTab && (
+                <button
+                  onClick={() => setDockerLogTab('speaches')}
+                  className={`px-3 py-1 rounded ${dockerLogTab === 'speaches' ? 'btn-primary text-white' : 'btn-secondary'}`}
+                >
+                  Speaches
+                </button>
+              )}
             </div>
           </div>
           <div className="p-4 rounded-lg font-mono text-sm overflow-y-auto max-h-96 border" style={{ background: '#0b1220', borderColor: 'var(--line-soft)', color: '#8de4af' }}>
