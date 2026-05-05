@@ -6,7 +6,7 @@ Running local AI today means installing multiple tools, hunting for the right mo
 
 Ignite handles the whole thing. Run the install and start scripts, or use `docker compose` directly if you prefer to manage the stack yourself, and you get a working local AI setup without hand-writing config files or guessing model settings.
 
-It detects your hardware, recommends models that fit, downloads them, configures everything, and gives you a working endpoint. All from one UI.
+It detects your hardware, recommends models that fit, downloads them, configures everything, and gives you working endpoints for LLM and optional speech features. All from one UI.
 
 If you can install Docker, you can run local AI.
 
@@ -66,6 +66,7 @@ What `start.sh` does:
 - checks Docker
 - prepares `./config` and `./models`
 - runs `docker compose up -d`
+- starts optional speech support with `Speaches` in CPU mode by default
 
 If you changed code, Dockerfiles, or dependencies and need fresh containers, use:
 
@@ -90,14 +91,19 @@ To rebuild manually:
 docker compose up -d --build
 ```
 
-You can also override the published ports through `.env`:
+You can also override the published ports and speech mode through `.env`:
 
 ```bash
 IGNITE_PORT=3000
 LLAMA_SWAP_PORT=8090
+SPEACHES_ACCEL=cpu
 ```
 
-After changing ports, restart Ignite.
+Speech mode options:
+- `SPEACHES_ACCEL=cpu`
+- `SPEACHES_ACCEL=cuda`
+
+After changing ports or speech mode, restart Ignite.
 
 ## Stop
 
@@ -159,6 +165,7 @@ IGNITE_MODELS_DIR=/path/to/models
 IGNITE_CONFIG_DIR=/path/to/config
 IGNITE_PORT=3000
 LLAMA_SWAP_PORT=8090
+SPEACHES_ACCEL=cpu
 IGNITE_RESTART_POLICY=no
 ```
 
@@ -169,32 +176,37 @@ IGNITE_RESTART_POLICY=no
 3. Review the recommended model
 4. Open `Models` and download a GGUF
 5. Add it to config with a launch preset
-6. Open `Test` and confirm it responds
-7. Use `Status` to copy the API endpoint for other apps
+6. Open `Playground` and confirm it responds
+7. Optionally install a speech model from `Discover -> Speech`
+8. Use `Status` to copy the API endpoint for other apps
 
 ## Pages
 
 | Page | Purpose |
 |------|---------|
 | `Setup` | Guided first-run flow |
-| `Status` | Runtime health, logs, Docker GPU preflight, API endpoint |
-| `Discover` | `llmfit` recommendations for the current machine |
+| `Status` | Runtime health, active endpoints, Docker GPU preflight |
+| `Runtime` | Runtime model state, load/unload, request activity |
+| `Discover` | `llmfit` LLM recommendations and downloadable speech registry |
 | `Config` | Structured and raw YAML editing for `llama-swap` |
-| `Models` | Download, inspect, delete, and add GGUFs to config |
-| `Test` | Send prompts through the running runtime |
-| `Settings` | Show runtime settings and Docker-managed paths |
+| `Models` | Installed GGUF and speech models, plus GGUF download/config flow |
+| `Playground` | Chat, vision, TTS, and STT testing from one page |
+| `Logs` | Docker/runtime logs |
+| `Updates` | Runtime version checks and update status |
+| `Settings` | Collapsed runtime settings, speech mode, paths, and endpoint reference |
 
 ## Stack
 
 - `ignite`: React + FastAPI app on `:3000`
 - `llama-runtime`: `llama-swap` + `llama-server`
 - `llmfit`: hardware-aware model recommendations
+- `speaches`: optional speech service for STT and TTS
 
 ## API
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| `GET` | `/api/status` | Runtime state, GPU stats, Docker preflight |
+| `GET` | `/api/status` | Runtime state, GPU stats, Docker preflight, speech status |
 | `GET` | `/api/discover/recommendations` | `llmfit` recommendation proxy |
 | `GET` | `/api/config` | Read runtime config |
 | `PUT` | `/api/config` | Save runtime config |
@@ -203,7 +215,13 @@ IGNITE_RESTART_POLICY=no
 | `POST` | `/api/config/add-model` | Generate a model entry from a GGUF |
 | `GET` | `/api/models` | List installed GGUF files |
 | `POST` | `/api/models/download` | Start model download |
-| `POST` | `/api/test` | Send a prompt through `llama-swap` |
+| `GET` | `/api/speech/registry` | List downloadable speech models from Speaches registry |
+| `GET` | `/api/speech/models` | List installed speech models |
+| `GET` | `/api/speech/voices` | List voices for an installed TTS model |
+| `POST` | `/api/speech/models/install/{model_id}` | Install a speech model |
+| `POST` | `/api/speech/test/tts` | Generate audio through Speaches |
+| `POST` | `/api/speech/test/stt` | Transcribe audio through Speaches |
+| `POST` | `/api/test` | Send an LLM prompt through `llama-swap` |
 | `GET` | `/health` | App health check |
 
 ## Security
@@ -222,6 +240,7 @@ Ignite is built around and depends on the following open-source projects:
 - [`llama-swap`](https://github.com/mostlygeek/llama-swap) — MIT License
 - [`llama.cpp`](https://github.com/ggml-org/llama.cpp) — MIT License
 - [`llmfit`](https://github.com/alexsjones/llmfit) — MIT License
+- [`speaches`](https://github.com/speaches-ai/speaches) — MIT License
 
 Ignite does not change the licenses of those projects. Their respective licenses apply to the components and binaries they provide.
 
