@@ -62,6 +62,7 @@ function ConfigPage() {
   const [advancedGpuMode, setAdvancedGpuMode] = useState(false)
   const [gpuOptions, setGpuOptions] = useState([])
   const [gpuStatus, setGpuStatus] = useState(null)
+  const [runtimeGpuWarning, setRuntimeGpuWarning] = useState(null)
   const [guideOpen, setGuideOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -105,11 +106,13 @@ function ConfigPage() {
       setAdvancedGpuMode(Boolean(settingsData.advanced_gpu_mode))
       setGpuOptions(Array.isArray(statusData?.gpu?.gpus) ? statusData.gpu.gpus : [])
       setGpuStatus(statusData?.gpu || null)
+      setRuntimeGpuWarning(statusData?.runtime_gpu_warning || null)
       setEnvDrafts(nextEnvDrafts)
       setMessage(null)
     } catch (error) {
       setConfig(null)
       setGpuStatus(null)
+      setRuntimeGpuWarning(null)
     } finally {
       setLoading(false)
     }
@@ -1219,7 +1222,10 @@ function ConfigPage() {
                                               color: '#fde68a'
                                             }}
                                           >
-                                            Ignite can see that a GPU exists, but it could not enumerate GPU UUIDs directly. In that state this dropdown falls back to `Any Visible GPU` until the stack is recreated cleanly.
+                                            {runtimeGpuWarning?.message || 'Ignite can see that a GPU exists, but it could not enumerate GPU UUIDs directly. In that state this dropdown falls back to `Any Visible GPU` until the stack is recreated cleanly.'}
+                                            {runtimeGpuWarning?.next_step && (
+                                              <div className="mt-2">{runtimeGpuWarning.next_step}</div>
+                                            )}
                                           </div>
                                         )}
                                       </div>

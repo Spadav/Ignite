@@ -10,6 +10,7 @@ function StatusPage() {
     running,
     pid,
     dockerGpu,
+    runtimeGpuWarning,
     dockerControlAvailable,
     dockerControlWarning,
     runtimeMode,
@@ -249,6 +250,27 @@ function StatusPage() {
           </div>
         )}
       </div>
+
+      {runtimeGpuWarning && (
+        <div
+          className="card mb-6"
+          style={{
+            padding: '1rem',
+            borderColor: 'rgba(245, 158, 11, 0.35)',
+            background: 'rgba(245, 158, 11, 0.10)'
+          }}
+        >
+          <h3 className="text-base font-semibold mb-2">Runtime GPU Warning</h3>
+          <p className="text-sm" style={{ color: '#fde68a' }}>
+            {runtimeGpuWarning.message}
+          </p>
+          {runtimeGpuWarning.next_step && (
+            <p className="text-xs mt-2" style={{ color: '#fde68a' }}>
+              {runtimeGpuWarning.next_step}
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
         <div className="card" style={{ padding: '1rem' }}>

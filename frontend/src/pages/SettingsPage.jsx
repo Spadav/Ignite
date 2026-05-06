@@ -99,6 +99,7 @@ function SettingsPage() {
   const inputClass = 'w-full px-3 py-2 rounded-lg border bg-transparent'
   const detectedGpus = Array.isArray(runtimeStatus?.gpu?.gpus) ? runtimeStatus.gpu.gpus : []
   const hasFallbackOnlyGpu = Boolean(runtimeStatus?.gpu?.available) && detectedGpus.length === 0
+  const runtimeGpuWarning = runtimeStatus?.runtime_gpu_warning || null
   const speech = runtimeStatus?.speech || null
   const speechApiBaseUrl = `${window.location.protocol}//127.0.0.1:${runtimeStatus?.speaches_port || 8000}/v1`
   const apiBaseUrl = `${window.location.protocol}//127.0.0.1:${settings.llama_swap_port}/v1`
@@ -217,7 +218,10 @@ function SettingsPage() {
               </div>
             ) : hasFallbackOnlyGpu ? (
               <div className="text-sm" style={{ color: '#fde68a' }}>
-                GPU exists, but direct GPU enumeration failed. Config will fall back to `Any Visible GPU`.
+                {runtimeGpuWarning?.message || 'GPU exists, but direct GPU enumeration failed. Config will fall back to `Any Visible GPU`.'}
+                {runtimeGpuWarning?.next_step && (
+                  <div className="mt-2 text-xs">{runtimeGpuWarning.next_step}</div>
+                )}
               </div>
             ) : (
               <p className="text-sm" style={{ color: 'var(--text-muted)' }}>

@@ -1823,6 +1823,29 @@ def get_runtime_gpu_stats() -> Dict[str, Any]:
     }
 
 
+def get_runtime_gpu_warning(gpu_stats: Dict[str, Any], docker_gpu: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    if not is_docker_managed_runtime():
+        return None
+
+    if not gpu_stats.get("available"):
+        return None
+
+    if gpu_stats.get("gpus"):
+        return None
+
+    if (docker_gpu or {}).get("state") not in ("ready", "containerized"):
+        return None
+
+    return {
+        "kind": "runtime_cuda_unavailable",
+        "message": (
+            "A GPU is present on the host, but the running llama-runtime container currently sees zero CUDA devices. "
+            "Models pinned with `--main-gpu 0` or advanced GPU assignment can fail until the stack is recreated cleanly."
+        ),
+        "next_step": "Recreate the stack with `docker compose down && docker compose up -d --build` after confirming host `nvidia-smi` works.",
+    }
+
+
 def rename_model(old_name: str, new_name: str) -> Dict[str, Any]:
     """Rename a model file"""
     old_path = Path(os.path.expanduser(settings["gguf_directory"])) / old_name
@@ -2354,6 +2377,7 @@ def api_status():
     pid = get_llama_swap_pid() if running else None
     gpu_stats = get_runtime_gpu_stats()
     docker_gpu = get_docker_gpu_preflight()
+    runtime_gpu_warning = get_runtime_gpu_warning(gpu_stats, docker_gpu)
     config_summary = get_config_summary()
     speech_status = get_speaches_status()
     
@@ -2364,6 +2388,7 @@ def api_status():
         "pid": pid,
         "gpu": gpu_stats,
         "docker_gpu": docker_gpu,
+        "runtime_gpu_warning": runtime_gpu_warning,
         "docker_control_available": can_manage_docker_runtime(),
         "docker_control_warning": get_docker_control_warning(),
         "runtime_mode": get_runtime_mode(),
