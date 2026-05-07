@@ -351,6 +351,67 @@ function ConfigPage() {
     return String(model?.metadata?.igniteFolder || '').trim()
   }
 
+  const getModelPathFromCmd = (cmd) => {
+    const match = String(cmd || '').match(/(?:^|\s)-m\s+([^\s]+)/)
+    return match?.[1] || ''
+  }
+
+  const getFileStem = (path) => {
+    const value = String(path || '').trim()
+    if (!value) return ''
+    const last = value.split('/').pop() || value
+    return last.replace(/\.(gguf|bin|safetensors)$/i, '')
+  }
+
+  const getModelFamily = (modelKey, model) => {
+    const explicit = String(model?.metadata?.igniteFamily || '').trim()
+    if (explicit) return explicit
+
+    const modelPath = getModelPathFromCmd(model?.cmd)
+    const pathStem = getFileStem(modelPath)
+    if (pathStem) return pathStem
+
+    const displayName = String(model?.name || '').trim()
+    if (displayName) return displayName
+
+    return modelKey
+  }
+
+  const getModelProfile = (modelKey, model) => {
+    const explicit = String(model?.metadata?.igniteProfile || '').trim()
+    if (explicit) return explicit
+
+    const description = String(model?.description || '').trim()
+    if (description) return description
+
+    return modelKey
+  }
+
+  const handleMetadataFieldChange = (modelKey, field, value) => {
+    setConfig(prev => {
+      const currentModel = prev.models[modelKey]
+      const nextMetadata = { ...(currentModel.metadata || {}) }
+      const trimmed = String(value || '').trim()
+
+      if (trimmed) {
+        nextMetadata[field] = trimmed
+      } else {
+        delete nextMetadata[field]
+      }
+
+      return {
+        ...prev,
+        models: {
+          ...prev.models,
+          [modelKey]: {
+            ...currentModel,
+            ...(Object.keys(nextMetadata).length > 0 ? { metadata: nextMetadata } : { metadata: undefined })
+          }
+        }
+      }
+    })
+  }
+
   const getFolderGroups = () => {
     const groups = {}
     for (const [modelKey, model] of Object.entries(config?.models || {})) {
@@ -364,6 +425,22 @@ function ConfigPage() {
       if (b === 'Ungrouped') return -1
       return a.localeCompare(b)
     })
+  }
+
+  const getFamilyGroups = (modelsInFolder) => {
+    const grouped = {}
+    for (const [modelKey, model] of modelsInFolder) {
+      const family = getModelFamily(modelKey, model)
+      if (!grouped[family]) grouped[family] = []
+      grouped[family].push([modelKey, model])
+    }
+
+    return Object.entries(grouped)
+      .map(([familyName, entries]) => [
+        familyName,
+        [...entries].sort(([aKey], [bKey]) => aKey.localeCompare(bKey))
+      ])
+      .sort(([a], [b]) => a.localeCompare(b))
   }
 
   const getRuntimeGroups = () => {
@@ -1087,32 +1164,45 @@ function ConfigPage() {
 
                   {(expandedFolders[folderName] ?? true) && (
                     <div className="mt-4 space-y-3 border-t pt-4" style={{ borderColor: 'var(--line-soft)' }}>
-                      {modelsInFolder.map(([key, model]) => {
-                        const stripParamsValue = model.filters?.stripParams ?? model.filters?.strip_params ?? ''
-                        const requestMode = model.metadata?.igniteRequestMode ?? model.metadata?.igniteTemplateMode ?? 'chat'
-                        const envText = envDrafts[key] ?? serializeEnv(model.env)
-                        const gpuAssignment = getGpuAssignment(model)
-                        const runtimeGroup = getModelAssignedGroup(key)
-
-                        return (
-                          <div key={key} className="rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)' }}>
-                            <button
-                              onClick={() => toggleModel(key)}
-                              className="w-full flex items-center justify-between text-left"
-                            >
-                              <div>
-                                <span className="font-semibold text-lg">{key}</span>
-                                <span className="ml-3 text-sm" style={{ color: 'var(--text-muted)' }}>
-                                  {model.name}
-                                </span>
+                      {getFamilyGroups(modelsInFolder).map(([familyName, familyModels]) => (
+                        <div key={familyName} className="rounded-xl border p-4" style={{ borderColor: 'var(--line-soft)', background: 'rgba(255,255,255,0.015)' }}>
+                          <div className="flex items-center justify-between gap-4 mb-4">
+                            <div>
+                              <div className="font-semibold text-base">{familyName}</div>
+                              <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                                {familyModels.length} profile{familyModels.length === 1 ? '' : 's'}
                               </div>
-                              <span className="text-xl" style={{ color: 'var(--text-muted)' }}>
-                                {expandedModels[key] ? '▼' : '▶'}
-                              </span>
-                            </button>
+                            </div>
+                          </div>
 
-                            {expandedModels[key] && (
-                              <div className="mt-4 space-y-4 border-t pt-4" style={{ borderColor: 'var(--line-soft)' }}>
+                          <div className="space-y-3">
+                            {familyModels.map(([key, model]) => {
+                              const stripParamsValue = model.filters?.stripParams ?? model.filters?.strip_params ?? ''
+                              const requestMode = model.metadata?.igniteRequestMode ?? model.metadata?.igniteTemplateMode ?? 'chat'
+                              const envText = envDrafts[key] ?? serializeEnv(model.env)
+                              const gpuAssignment = getGpuAssignment(model)
+                              const runtimeGroup = getModelAssignedGroup(key)
+                              const profileLabel = getModelProfile(key, model)
+
+                              return (
+                                <div key={key} className="rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)' }}>
+                                  <button
+                                    onClick={() => toggleModel(key)}
+                                    className="w-full flex items-center justify-between text-left"
+                                  >
+                                    <div>
+                                      <span className="font-semibold text-lg">{key}</span>
+                                      <span className="ml-3 text-sm" style={{ color: 'var(--text-muted)' }}>
+                                        {profileLabel}
+                                      </span>
+                                    </div>
+                                    <span className="text-xl" style={{ color: 'var(--text-muted)' }}>
+                                      {expandedModels[key] ? '▼' : '▶'}
+                                    </span>
+                                  </button>
+
+                                  {expandedModels[key] && (
+                                    <div className="mt-4 space-y-4 border-t pt-4" style={{ borderColor: 'var(--line-soft)' }}>
                                 <div className="rounded-lg border p-4 space-y-4" style={{ borderColor: 'var(--line-soft)' }}>
                                   <div className="text-sm font-semibold">General</div>
                                   <div>
@@ -1144,6 +1234,36 @@ function ConfigPage() {
                                       placeholder="Short note about what this config is for"
                                       className={inputClass}
                                     />
+                                  </div>
+
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                      <label className="block text-sm font-medium mb-1">Model Family</label>
+                                      <input
+                                        type="text"
+                                        value={String(model.metadata?.igniteFamily || '')}
+                                        onChange={(e) => handleMetadataFieldChange(key, 'igniteFamily', e.target.value)}
+                                        placeholder={getModelFamily(key, model)}
+                                        className={inputClass}
+                                      />
+                                      <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                                        Visual grouping only. Keep config names unique for agents and harnesses.
+                                      </p>
+                                    </div>
+
+                                    <div>
+                                      <label className="block text-sm font-medium mb-1">Profile Label</label>
+                                      <input
+                                        type="text"
+                                        value={String(model.metadata?.igniteProfile || '')}
+                                        onChange={(e) => handleMetadataFieldChange(key, 'igniteProfile', e.target.value)}
+                                        placeholder={getModelProfile(key, model)}
+                                        className={inputClass}
+                                      />
+                                      <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                                        Example: `No Thinking`, `Harness A`, `Creative`, `Agent`.
+                                      </p>
+                                    </div>
                                   </div>
                                 </div>
 
@@ -1381,11 +1501,14 @@ function ConfigPage() {
                                     </button>
                                   )}
                                 </div>
-                              </div>
-                            )}
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
                           </div>
-                        )
-                      })}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
