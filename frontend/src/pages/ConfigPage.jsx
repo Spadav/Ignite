@@ -60,14 +60,16 @@ function ConfigPage() {
   const [config, setConfig] = useState(null)
   const [rawConfig, setRawConfig] = useState('')
   const [advancedGpuMode, setAdvancedGpuMode] = useState(false)
+  const [runtimeProfile, setRuntimeProfile] = useState('unknown')
   const [gpuOptions, setGpuOptions] = useState([])
   const [gpuStatus, setGpuStatus] = useState(null)
   const [runtimeGpuWarning, setRuntimeGpuWarning] = useState(null)
   const [guideOpen, setGuideOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [expandedModels, setExpandedModels] = useState({})
-  const [expandedFolders, setExpandedFolders] = useState({})
+  const [expandedFamilies, setExpandedFamilies] = useState({})
+  const [selectedFolderFilter, setSelectedFolderFilter] = useState('all')
+  const [selectedFamilyProfiles, setSelectedFamilyProfiles] = useState({})
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [message, setMessage] = useState(null)
   const [editorMode, setEditorMode] = useState('structured')
@@ -104,6 +106,7 @@ function ConfigPage() {
       setConfig(configData)
       setRawConfig(rawData.content || '')
       setAdvancedGpuMode(Boolean(settingsData.advanced_gpu_mode))
+      setRuntimeProfile(detectRuntimeProfile(settingsData))
       setGpuOptions(Array.isArray(statusData?.gpu?.gpus) ? statusData.gpu.gpus : [])
       setGpuStatus(statusData?.gpu || null)
       setRuntimeGpuWarning(statusData?.runtime_gpu_warning || null)
@@ -111,6 +114,7 @@ function ConfigPage() {
       setMessage(null)
     } catch (error) {
       setConfig(null)
+      setRuntimeProfile('unknown')
       setGpuStatus(null)
       setRuntimeGpuWarning(null)
     } finally {
@@ -171,12 +175,8 @@ function ConfigPage() {
     setGuideOpen(true)
   }
 
-  const toggleModel = (key) => {
-    setExpandedModels(prev => ({ ...prev, [key]: !prev[key] }))
-  }
-
-  const toggleFolder = (folderName) => {
-    setExpandedFolders(prev => ({ ...prev, [folderName]: !(prev[folderName] ?? true) }))
+  const toggleFamily = (familyName) => {
+    setExpandedFamilies(prev => ({ ...prev, [familyName]: !(prev[familyName] ?? true) }))
   }
 
   const handleModelChange = (modelKey, field, value) => {
@@ -249,6 +249,60 @@ function ConfigPage() {
     }
 
     return `${next} ${flag} ${value}`.trim()
+  }
+
+  const ensureBareFlag = (cmd, flag) => {
+    const escapedFlag = flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const barePattern = new RegExp(`${escapedFlag}(?=\\s|$)`, 'g')
+    let next = String(cmd || '').replace(barePattern, '')
+    next = next.replace(/\s+/g, ' ').trim()
+    return `${next} ${flag}`.trim()
+  }
+
+  const removeChatTemplateKwargs = (cmd) => {
+    return String(cmd || '')
+      .replace(/--chat-template-kwargs\s+('(?:[^']*)'|"(?:[^"]*)")/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+
+  const isThinkingDisabled = (cmd) => {
+    const normalized = String(cmd || '').replace(/\s+/g, '')
+    return normalized.includes('enable_thinking":false') || normalized.includes("enable_thinking':false")
+  }
+
+  const detectRuntimeProfile = (settingsData) => {
+    const image =
+      String(settingsData?._meta?.runtime_refs?.llama_cpp_image || settingsData?.llama_cpp_image || '')
+        .toLowerCase()
+    if (!image) return 'unknown'
+    if (image.includes('ik-llama') || image.includes('ik_llama') || image.includes('ikawrakow')) return 'ik'
+    if (image.includes('llama.cpp')) return 'llama'
+    return 'unknown'
+  }
+
+  const handleThinkingToggle = (modelKey, enabled) => {
+    setConfig(prev => {
+      const model = { ...prev.models[modelKey] }
+      let nextCmd = removeChatTemplateKwargs(model.cmd)
+
+      if (!enabled) {
+        if (runtimeProfile === 'ik') {
+          nextCmd = ensureBareFlag(nextCmd, '--jinja')
+        }
+        nextCmd = `${nextCmd} --chat-template-kwargs '{"enable_thinking":false}'`.trim()
+      }
+
+      model.cmd = nextCmd.replace(/\s+/g, ' ').trim()
+
+      return {
+        ...prev,
+        models: {
+          ...prev.models,
+          [modelKey]: model
+        }
+      }
+    })
   }
 
   const getGpuAssignment = (model) => {
@@ -412,35 +466,61 @@ function ConfigPage() {
     })
   }
 
-  const getFolderGroups = () => {
-    const groups = {}
-    for (const [modelKey, model] of Object.entries(config?.models || {})) {
-      const folderName = getModelFolder(model) || 'Ungrouped'
-      if (!groups[folderName]) groups[folderName] = []
-      groups[folderName].push([modelKey, model])
+  const getFolderOptions = () => {
+    const folderNames = new Set()
+    for (const model of Object.values(config?.models || {})) {
+      folderNames.add(getModelFolder(model) || 'Ungrouped')
     }
 
-    return Object.entries(groups).sort(([a], [b]) => {
+    return Array.from(folderNames).sort((a, b) => {
       if (a === 'Ungrouped') return 1
       if (b === 'Ungrouped') return -1
       return a.localeCompare(b)
     })
   }
 
-  const getFamilyGroups = (modelsInFolder) => {
+  const getFamilyGroups = (entries) => {
     const grouped = {}
-    for (const [modelKey, model] of modelsInFolder) {
+    for (const [modelKey, model] of entries) {
       const family = getModelFamily(modelKey, model)
       if (!grouped[family]) grouped[family] = []
       grouped[family].push([modelKey, model])
     }
 
     return Object.entries(grouped)
-      .map(([familyName, entries]) => [
+      .map(([familyName, familyEntries]) => [
         familyName,
-        [...entries].sort(([aKey], [bKey]) => aKey.localeCompare(bKey))
+        [...familyEntries].sort(([aKey], [bKey]) => aKey.localeCompare(bKey))
       ])
       .sort(([a], [b]) => a.localeCompare(b))
+  }
+
+  const getVisibleFamilyGroups = () => {
+    const visibleEntries = Object.entries(config?.models || {}).filter(([, model]) => {
+      if (selectedFolderFilter === 'all') return true
+      const folderName = getModelFolder(model) || 'Ungrouped'
+      return folderName === selectedFolderFilter
+    })
+
+    return getFamilyGroups(visibleEntries).map(([familyName, familyEntries]) => {
+      const folders = Array.from(new Set(
+        familyEntries.map(([, model]) => getModelFolder(model) || 'Ungrouped')
+      )).sort((a, b) => a.localeCompare(b))
+
+      return { familyName, familyEntries, folders }
+    })
+  }
+
+  const getSelectedFamilyProfile = (familyName, familyEntries) => {
+    const current = selectedFamilyProfiles[familyName]
+    if (current && familyEntries.some(([key]) => key === current)) {
+      return current
+    }
+    return familyEntries[0]?.[0] || ''
+  }
+
+  const selectFamilyProfile = (familyName, modelKey) => {
+    setSelectedFamilyProfiles(prev => ({ ...prev, [familyName]: modelKey }))
   }
 
   const getRuntimeGroups = () => {
@@ -600,7 +680,6 @@ function ConfigPage() {
     }
 
     setConfig(prev => ({ ...prev, models: nextModels }))
-    setExpandedFolders(prev => ({ ...prev, [trimmedName]: true }))
     closeFolderModal()
   }
 
@@ -674,7 +753,6 @@ function ConfigPage() {
       }
     }))
     setEnvDrafts(prev => ({ ...prev, [key]: '' }))
-    setExpandedModels(prev => ({ ...prev, [key]: true }))
   }
 
   const renameModelKey = (oldKey, newKey) => {
@@ -706,25 +784,375 @@ function ConfigPage() {
       }
       return newConfig
     })
-    setExpandedModels(prev => {
-      const next = { ...prev }
-      next[newKey] = next[oldKey]
-      delete next[oldKey]
-      return next
-    })
     setEnvDrafts(prev => {
       const next = { ...prev }
       next[newKey] = next[oldKey] ?? ''
       delete next[oldKey]
       return next
     })
+    setSelectedFamilyProfiles(prev => {
+      const next = { ...prev }
+      for (const [familyName, profileKey] of Object.entries(next)) {
+        if (profileKey === oldKey) next[familyName] = newKey
+      }
+      return next
+    })
+  }
+
+  const renderModelEditor = (key, model) => {
+    const stripParamsValue = model.filters?.stripParams ?? model.filters?.strip_params ?? ''
+    const requestMode = model.metadata?.igniteRequestMode ?? model.metadata?.igniteTemplateMode ?? 'chat'
+    const envText = envDrafts[key] ?? serializeEnv(model.env)
+    const gpuAssignment = getGpuAssignment(model)
+    const runtimeGroup = getModelAssignedGroup(key)
+    const thinkingSupported = runtimeProfile === 'llama' || runtimeProfile === 'ik'
+    const thinkingEnabled = !isThinkingDisabled(model.cmd)
+
+    return (
+      <div className="space-y-4">
+        <div className="rounded-lg border p-4 space-y-4" style={{ borderColor: 'var(--line-soft)' }}>
+          <div className="text-sm font-semibold">General</div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Model Key</label>
+            <input
+              type="text"
+              defaultValue={key}
+              onBlur={(e) => renameModelKey(key, e.target.value.trim())}
+              className={inputClass}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Name</label>
+            <input
+              type="text"
+              value={model.name || ''}
+              onChange={(e) => handleModelChange(key, 'name', e.target.value)}
+              className={inputClass}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Description</label>
+            <input
+              type="text"
+              value={model.description || ''}
+              onChange={(e) => handleModelChange(key, 'description', e.target.value)}
+              placeholder="Short note about what this config is for"
+              className={inputClass}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Model Family</label>
+              <input
+                type="text"
+                value={String(model.metadata?.igniteFamily || '')}
+                onChange={(e) => handleMetadataFieldChange(key, 'igniteFamily', e.target.value)}
+                placeholder={getModelFamily(key, model)}
+                className={inputClass}
+              />
+              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                Visual grouping only. Keep config names unique for agents and harnesses.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Profile Label</label>
+              <input
+                type="text"
+                value={String(model.metadata?.igniteProfile || '')}
+                onChange={(e) => handleMetadataFieldChange(key, 'igniteProfile', e.target.value)}
+                placeholder={getModelProfile(key, model)}
+                className={inputClass}
+              />
+              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                Example: `No Thinking`, `Harness A`, `Creative`, `Agent`.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-lg border p-4 space-y-4" style={{ borderColor: 'var(--line-soft)' }}>
+          <div className="text-sm font-semibold">Runtime</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Proxy</label>
+              <input
+                type="text"
+                value={model.proxy || ''}
+                onChange={(e) => handleModelChange(key, 'proxy', e.target.value)}
+                className={`${inputClass} font-mono text-sm`}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">TTL (seconds)</label>
+              <input
+                type="number"
+                value={model.ttl ?? ''}
+                onChange={(e) => handleModelChange(key, 'ttl', e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0)}
+                placeholder="Use global TTL"
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Check Endpoint</label>
+              <input
+                type="text"
+                value={model.checkEndpoint || ''}
+                onChange={(e) => handleModelChange(key, 'checkEndpoint', e.target.value || undefined)}
+                placeholder="/health"
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Use Model Name</label>
+              <input
+                type="text"
+                value={model.useModelName || ''}
+                onChange={(e) => handleModelChange(key, 'useModelName', e.target.value || undefined)}
+                placeholder="Override upstream model name"
+                className={inputClass}
+              />
+            </div>
+          </div>
+
+          {advancedGpuMode && (
+            <>
+              <div>
+                <label className="block text-sm font-medium mb-1">GPU Assignment</label>
+                <select
+                  value={gpuAssignment}
+                  onChange={(e) => handleGpuAssignmentChange(key, e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="any">Any Visible GPU</option>
+                  {gpuOptions.map((gpu) => (
+                    <option key={gpu.uuid || gpu.index} value={gpu.uuid || String(gpu.index)}>
+                      GPU {gpu.index}: {gpu.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                  Advanced GPU Mode pins this model with the selected GPU UUID plus `--split-mode none` and `--main-gpu 0`.
+                </p>
+                {hasFallbackOnlyGpu && (
+                  <div
+                    className="mt-2 rounded-lg border p-3 text-xs"
+                    style={{
+                      borderColor: 'rgba(245, 158, 11, 0.35)',
+                      background: 'rgba(245, 158, 11, 0.10)',
+                      color: '#fde68a'
+                    }}
+                  >
+                    {runtimeGpuWarning?.message || 'Ignite can see that a GPU exists, but it could not enumerate GPU UUIDs directly. In that state this dropdown falls back to `Any Visible GPU` until the stack is recreated cleanly.'}
+                    {runtimeGpuWarning?.next_step && (
+                      <div className="mt-2">{runtimeGpuWarning.next_step}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Runtime Group</label>
+                <select
+                  value={runtimeGroup}
+                  onChange={(e) => handleModelGroupAssignment(key, e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">Default Runtime Behavior</option>
+                  {getRuntimeGroups().map(([groupName]) => (
+                    <option key={groupName} value={groupName}>{groupName}</option>
+                  ))}
+                </select>
+                <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                  Assign this model to a llama-swap group when you want custom swapping or multiple loaded models.
+                </p>
+              </div>
+            </>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Request Mode</label>
+            <select
+              value={requestMode}
+              onChange={(e) => handleRequestModeChange(key, e.target.value)}
+              className={inputClass}
+            >
+              <option value="chat">Chat</option>
+              <option value="completion">Completion</option>
+            </select>
+            <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+              Use Chat for instruct/conversation models. Use Completion for code or continuation models like StarCoder.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-2">Thinking</label>
+            {thinkingSupported ? (
+              <>
+                <div className="inline-flex rounded-lg border overflow-hidden" style={{ borderColor: 'var(--line-soft)' }}>
+                  <button
+                    type="button"
+                    onClick={() => handleThinkingToggle(key, true)}
+                    className="px-3 py-2 text-sm"
+                    style={{ background: thinkingEnabled ? 'var(--line-soft)' : 'transparent' }}
+                  >
+                    On
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleThinkingToggle(key, false)}
+                    className="px-3 py-2 text-sm"
+                    style={{ background: !thinkingEnabled ? 'var(--line-soft)' : 'transparent' }}
+                  >
+                    Off
+                  </button>
+                </div>
+                <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                  {runtimeProfile === 'ik'
+                    ? 'For ik_llama.cpp, turning thinking off also ensures `--jinja` is present so `enable_thinking=false` is respected.'
+                    : 'For mainline llama.cpp, this toggles `--chat-template-kwargs {\"enable_thinking\":false}`.'}
+                </p>
+              </>
+            ) : (
+              <div className="text-xs rounded-lg border p-3" style={{ borderColor: 'var(--line-soft)', color: 'var(--text-muted)' }}>
+                Thinking toggle is only automated for the known runtime profiles `llama.cpp` and `ik_llama.cpp`.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-lg border p-4 space-y-4" style={{ borderColor: 'var(--line-soft)' }}>
+          <div className="text-sm font-semibold">Command</div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Command</label>
+            <textarea
+              value={model.cmd || ''}
+              onChange={(e) => handleModelChange(key, 'cmd', e.target.value)}
+              rows={8}
+              className={`${inputClass} font-mono text-sm`}
+            />
+          </div>
+        </div>
+
+        <div className="rounded-lg border p-4 space-y-4" style={{ borderColor: 'var(--line-soft)' }}>
+          <div className="text-sm font-semibold">Env</div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Environment Variables</label>
+            <textarea
+              value={envText}
+              onChange={(e) => handleEnvChange(key, e.target.value)}
+              rows={5}
+              placeholder={'CUDA_VISIBLE_DEVICES=1\nHF_TOKEN=...'}
+              className={`${inputClass} font-mono text-sm`}
+            />
+            <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+              One `KEY=value` per line. Leave empty to remove model-specific environment overrides.
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-lg border p-4 space-y-4" style={{ borderColor: 'var(--line-soft)' }}>
+          <div className="text-sm font-semibold">Aliases And Filters</div>
+          {model.aliases ? (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium">Aliases (comma-separated)</label>
+                <button
+                  onClick={() => removeAliases(key)}
+                  className="text-xs text-red-500 hover:text-red-700"
+                >
+                  Remove aliases
+                </button>
+              </div>
+              <input
+                type="text"
+                value={(model.aliases || []).join(', ')}
+                onChange={(e) => handleAliasesChange(key, e.target.value)}
+                placeholder="alias-1, alias-2"
+                className={`${inputClass} text-sm`}
+              />
+            </div>
+          ) : (
+            <button
+              onClick={() => handleModelChange(key, 'aliases', [''])}
+              className="text-sm text-blue-500 hover:text-blue-700"
+            >
+              + Add aliases
+            </button>
+          )}
+
+          {model.filters ? (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium">Filters (stripParams)</label>
+                <button
+                  onClick={() => removeFilters(key)}
+                  className="text-xs text-red-500 hover:text-red-700"
+                >
+                  Remove filters
+                </button>
+              </div>
+              <input
+                type="text"
+                value={stripParamsValue}
+                onChange={(e) => handleFilterChange(key, e.target.value)}
+                placeholder="temperature, top_k, top_p"
+                className={`${inputClass} text-sm`}
+              />
+            </div>
+          ) : (
+            <button
+              onClick={() => handleFilterChange(key, '')}
+              className="text-sm text-blue-500 hover:text-blue-700"
+            >
+              + Add filters
+            </button>
+          )}
+        </div>
+
+        <div className="pt-2 border-t" style={{ borderColor: 'var(--line-soft)' }}>
+          {deleteConfirm === key ? (
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-red-500">Delete this model?</span>
+              <button
+                onClick={() => deleteModel(key)}
+                className="text-sm px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700"
+              >
+                Confirm
+              </button>
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="text-sm px-3 py-1 rounded"
+                style={{ background: 'var(--line-soft)' }}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setDeleteConfirm(key)}
+              className="text-sm text-red-500 hover:text-red-700"
+            >
+              Delete model
+            </button>
+          )}
+        </div>
+      </div>
+    )
   }
 
   if (loading) return <p className="p-6">Loading...</p>
   if (!config) return <p className="p-6 text-red-500">Config file not found</p>
 
   const inputClass = 'w-full px-3 py-2 rounded-lg border bg-transparent'
-  const folderGroups = getFolderGroups()
+  const folderOptions = getFolderOptions()
+  const visibleFamilyGroups = getVisibleFamilyGroups()
   const hasFallbackOnlyGpu = Boolean(gpuStatus?.available) && gpuOptions.length === 0
 
   return (
@@ -1132,387 +1560,124 @@ function ConfigPage() {
               </div>
             </div>
 
-            <div className="space-y-3">
-              {folderGroups.map(([folderName, modelsInFolder]) => (
-                <div key={folderName} className="card">
-                  <div className="flex items-center justify-between gap-4">
+            <div className="card mb-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <div className="text-sm font-semibold">Use-Case Filters</div>
+                  <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                    Folders are now filters only. Models are grouped by family first, with profile tabs inside each family.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setSelectedFolderFilter('all')}
+                    className="btn text-sm"
+                    style={{ background: selectedFolderFilter === 'all' ? 'var(--line-soft)' : 'transparent' }}
+                  >
+                    All
+                  </button>
+                  {folderOptions.map((folderName) => (
                     <button
-                      onClick={() => toggleFolder(folderName)}
-                      className="flex-1 flex items-center justify-between text-left"
+                      key={folderName}
+                      onClick={() => setSelectedFolderFilter(folderName)}
+                      className="btn text-sm"
+                      style={{ background: selectedFolderFilter === folderName ? 'var(--line-soft)' : 'transparent' }}
                     >
-                      <div>
-                        <span className="font-semibold text-lg">{folderName}</span>
-                        <span className="ml-3 text-sm" style={{ color: 'var(--text-muted)' }}>
-                          {modelsInFolder.length} config{modelsInFolder.length === 1 ? '' : 's'}
-                        </span>
-                      </div>
-                      <span className="text-xl" style={{ color: 'var(--text-muted)' }}>
-                        {(expandedFolders[folderName] ?? true) ? '▼' : '▶'}
-                      </span>
+                      {folderName}
                     </button>
-                    {folderName !== 'Ungrouped' && (
-                      <div className="flex items-center gap-2">
-                        <button onClick={() => openManageFolderModal(folderName)} className="btn btn-secondary text-sm">
-                          Manage
-                        </button>
-                        <button onClick={() => removeFolder(folderName)} className="btn text-sm">
-                          Remove
+                  ))}
+                </div>
+              </div>
+
+              {selectedFolderFilter !== 'all' && selectedFolderFilter !== 'Ungrouped' && (
+                <div className="flex items-center gap-2 mt-4 pt-4 border-t" style={{ borderColor: 'var(--line-soft)' }}>
+                  <button onClick={() => openManageFolderModal(selectedFolderFilter)} className="btn btn-secondary text-sm">
+                    Manage Folder
+                  </button>
+                  <button onClick={() => removeFolder(selectedFolderFilter)} className="btn text-sm">
+                    Remove Folder
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-3">
+              {visibleFamilyGroups.length === 0 ? (
+                <div className="card text-sm" style={{ color: 'var(--text-muted)' }}>
+                  No model configs match the current folder filter.
+                </div>
+              ) : (
+                visibleFamilyGroups.map(({ familyName, familyEntries, folders }) => {
+                  const selectedProfileKey = getSelectedFamilyProfile(familyName, familyEntries)
+                  const selectedPair = familyEntries.find(([profileKey]) => profileKey === selectedProfileKey) || familyEntries[0]
+                  const [key, model] = selectedPair
+
+                  return (
+                    <div key={familyName} className="card">
+                      <div className="flex items-center justify-between gap-4">
+                        <button
+                          onClick={() => toggleFamily(familyName)}
+                          className="flex-1 flex items-center justify-between text-left"
+                        >
+                          <div>
+                            <div className="font-semibold text-lg">{familyName}</div>
+                            <div className="flex flex-wrap items-center gap-2 mt-2">
+                              {folders.map((folderName) => (
+                                <span
+                                  key={folderName}
+                                  className="px-2 py-1 rounded-full text-xs border"
+                                  style={{ borderColor: 'var(--line-soft)', color: 'var(--text-muted)' }}
+                                >
+                                  {folderName}
+                                </span>
+                              ))}
+                              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                                {familyEntries.length} profile{familyEntries.length === 1 ? '' : 's'}
+                              </span>
+                            </div>
+                          </div>
+                          <span className="text-xl" style={{ color: 'var(--text-muted)' }}>
+                            {(expandedFamilies[familyName] ?? false) ? '▼' : '▶'}
+                          </span>
                         </button>
                       </div>
-                    )}
-                  </div>
 
-                  {(expandedFolders[folderName] ?? true) && (
-                    <div className="mt-4 space-y-3 border-t pt-4" style={{ borderColor: 'var(--line-soft)' }}>
-                      {getFamilyGroups(modelsInFolder).map(([familyName, familyModels]) => (
-                        <div key={familyName} className="rounded-xl border p-4" style={{ borderColor: 'var(--line-soft)', background: 'rgba(255,255,255,0.015)' }}>
-                          <div className="flex items-center justify-between gap-4 mb-4">
-                            <div>
-                              <div className="font-semibold text-base">{familyName}</div>
-                              <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                                {familyModels.length} profile{familyModels.length === 1 ? '' : 's'}
-                              </div>
+                      {(expandedFamilies[familyName] ?? false) && (
+                        <div className="mt-4 space-y-4 border-t pt-4" style={{ borderColor: 'var(--line-soft)' }}>
+                          <div>
+                            <div className="text-sm font-semibold mb-2">Profiles</div>
+                            <div className="flex flex-wrap gap-2">
+                              {familyEntries.map(([profileKey, profileModel]) => {
+                                const profileLabel = getModelProfile(profileKey, profileModel)
+                                const active = profileKey === selectedProfileKey
+                                return (
+                                  <button
+                                    key={profileKey}
+                                    onClick={() => selectFamilyProfile(familyName, profileKey)}
+                                    className="btn text-sm"
+                                    style={{ background: active ? 'var(--line-soft)' : 'transparent' }}
+                                  >
+                                    {profileLabel}
+                                  </button>
+                                )
+                              })}
                             </div>
                           </div>
 
-                          <div className="space-y-3">
-                            {familyModels.map(([key, model]) => {
-                              const stripParamsValue = model.filters?.stripParams ?? model.filters?.strip_params ?? ''
-                              const requestMode = model.metadata?.igniteRequestMode ?? model.metadata?.igniteTemplateMode ?? 'chat'
-                              const envText = envDrafts[key] ?? serializeEnv(model.env)
-                              const gpuAssignment = getGpuAssignment(model)
-                              const runtimeGroup = getModelAssignedGroup(key)
-                              const profileLabel = getModelProfile(key, model)
-
-                              return (
-                                <div key={key} className="rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)' }}>
-                                  <button
-                                    onClick={() => toggleModel(key)}
-                                    className="w-full flex items-center justify-between text-left"
-                                  >
-                                    <div>
-                                      <span className="font-semibold text-lg">{key}</span>
-                                      <span className="ml-3 text-sm" style={{ color: 'var(--text-muted)' }}>
-                                        {profileLabel}
-                                      </span>
-                                    </div>
-                                    <span className="text-xl" style={{ color: 'var(--text-muted)' }}>
-                                      {expandedModels[key] ? '▼' : '▶'}
-                                    </span>
-                                  </button>
-
-                                  {expandedModels[key] && (
-                                    <div className="mt-4 space-y-4 border-t pt-4" style={{ borderColor: 'var(--line-soft)' }}>
-                                <div className="rounded-lg border p-4 space-y-4" style={{ borderColor: 'var(--line-soft)' }}>
-                                  <div className="text-sm font-semibold">General</div>
-                                  <div>
-                                    <label className="block text-sm font-medium mb-1">Model Key</label>
-                                    <input
-                                      type="text"
-                                      defaultValue={key}
-                                      onBlur={(e) => renameModelKey(key, e.target.value.trim())}
-                                      className={inputClass}
-                                    />
-                                  </div>
-
-                                  <div>
-                                    <label className="block text-sm font-medium mb-1">Name</label>
-                                    <input
-                                      type="text"
-                                      value={model.name || ''}
-                                      onChange={(e) => handleModelChange(key, 'name', e.target.value)}
-                                      className={inputClass}
-                                    />
-                                  </div>
-
-                                  <div>
-                                    <label className="block text-sm font-medium mb-1">Description</label>
-                                    <input
-                                      type="text"
-                                      value={model.description || ''}
-                                      onChange={(e) => handleModelChange(key, 'description', e.target.value)}
-                                      placeholder="Short note about what this config is for"
-                                      className={inputClass}
-                                    />
-                                  </div>
-
-                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                      <label className="block text-sm font-medium mb-1">Model Family</label>
-                                      <input
-                                        type="text"
-                                        value={String(model.metadata?.igniteFamily || '')}
-                                        onChange={(e) => handleMetadataFieldChange(key, 'igniteFamily', e.target.value)}
-                                        placeholder={getModelFamily(key, model)}
-                                        className={inputClass}
-                                      />
-                                      <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                                        Visual grouping only. Keep config names unique for agents and harnesses.
-                                      </p>
-                                    </div>
-
-                                    <div>
-                                      <label className="block text-sm font-medium mb-1">Profile Label</label>
-                                      <input
-                                        type="text"
-                                        value={String(model.metadata?.igniteProfile || '')}
-                                        onChange={(e) => handleMetadataFieldChange(key, 'igniteProfile', e.target.value)}
-                                        placeholder={getModelProfile(key, model)}
-                                        className={inputClass}
-                                      />
-                                      <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                                        Example: `No Thinking`, `Harness A`, `Creative`, `Agent`.
-                                      </p>
-                                    </div>
-                                  </div>
-                                </div>
-
-                                <div className="rounded-lg border p-4 space-y-4" style={{ borderColor: 'var(--line-soft)' }}>
-                                  <div className="text-sm font-semibold">Runtime</div>
-                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                      <label className="block text-sm font-medium mb-1">Proxy</label>
-                                      <input
-                                        type="text"
-                                        value={model.proxy || ''}
-                                        onChange={(e) => handleModelChange(key, 'proxy', e.target.value)}
-                                        className={`${inputClass} font-mono text-sm`}
-                                      />
-                                    </div>
-
-                                    <div>
-                                      <label className="block text-sm font-medium mb-1">TTL (seconds)</label>
-                                      <input
-                                        type="number"
-                                        value={model.ttl ?? ''}
-                                        onChange={(e) => handleModelChange(key, 'ttl', e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0)}
-                                        placeholder="Use global TTL"
-                                        className={inputClass}
-                                      />
-                                    </div>
-
-                                    <div>
-                                      <label className="block text-sm font-medium mb-1">Check Endpoint</label>
-                                      <input
-                                        type="text"
-                                        value={model.checkEndpoint || ''}
-                                        onChange={(e) => handleModelChange(key, 'checkEndpoint', e.target.value || undefined)}
-                                        placeholder="/health"
-                                        className={inputClass}
-                                      />
-                                    </div>
-
-                                    <div>
-                                      <label className="block text-sm font-medium mb-1">Use Model Name</label>
-                                      <input
-                                        type="text"
-                                        value={model.useModelName || ''}
-                                        onChange={(e) => handleModelChange(key, 'useModelName', e.target.value || undefined)}
-                                        placeholder="Override upstream model name"
-                                        className={inputClass}
-                                      />
-                                    </div>
-                                  </div>
-
-                                  {advancedGpuMode && (
-                                    <>
-                                      <div>
-                                        <label className="block text-sm font-medium mb-1">GPU Assignment</label>
-                                        <select
-                                          value={gpuAssignment}
-                                          onChange={(e) => handleGpuAssignmentChange(key, e.target.value)}
-                                          className={inputClass}
-                                        >
-                                          <option value="any">Any Visible GPU</option>
-                                          {gpuOptions.map((gpu) => (
-                                            <option key={gpu.uuid || gpu.index} value={gpu.uuid || String(gpu.index)}>
-                                              GPU {gpu.index}: {gpu.name}
-                                            </option>
-                                          ))}
-                                        </select>
-                                        <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                                          Advanced GPU Mode pins this model with the selected GPU UUID plus `--split-mode none` and `--main-gpu 0`.
-                                        </p>
-                                        {hasFallbackOnlyGpu && (
-                                          <div
-                                            className="mt-2 rounded-lg border p-3 text-xs"
-                                            style={{
-                                              borderColor: 'rgba(245, 158, 11, 0.35)',
-                                              background: 'rgba(245, 158, 11, 0.10)',
-                                              color: '#fde68a'
-                                            }}
-                                          >
-                                            {runtimeGpuWarning?.message || 'Ignite can see that a GPU exists, but it could not enumerate GPU UUIDs directly. In that state this dropdown falls back to `Any Visible GPU` until the stack is recreated cleanly.'}
-                                            {runtimeGpuWarning?.next_step && (
-                                              <div className="mt-2">{runtimeGpuWarning.next_step}</div>
-                                            )}
-                                          </div>
-                                        )}
-                                      </div>
-
-                                      <div>
-                                        <label className="block text-sm font-medium mb-1">Runtime Group</label>
-                                        <select
-                                          value={runtimeGroup}
-                                          onChange={(e) => handleModelGroupAssignment(key, e.target.value)}
-                                          className={inputClass}
-                                        >
-                                          <option value="">Default Runtime Behavior</option>
-                                          {getRuntimeGroups().map(([groupName]) => (
-                                            <option key={groupName} value={groupName}>{groupName}</option>
-                                          ))}
-                                        </select>
-                                        <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                                          Assign this model to a llama-swap group when you want custom swapping or multiple loaded models.
-                                        </p>
-                                      </div>
-                                    </>
-                                  )}
-
-                                  <div>
-                                    <label className="block text-sm font-medium mb-1">Request Mode</label>
-                                    <select
-                                      value={requestMode}
-                                      onChange={(e) => handleRequestModeChange(key, e.target.value)}
-                                      className={inputClass}
-                                    >
-                                      <option value="chat">Chat</option>
-                                      <option value="completion">Completion</option>
-                                    </select>
-                                    <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                                      Use Chat for instruct/conversation models. Use Completion for code or continuation models like StarCoder.
-                                    </p>
-                                  </div>
-                                </div>
-
-                                <div className="rounded-lg border p-4 space-y-4" style={{ borderColor: 'var(--line-soft)' }}>
-                                  <div className="text-sm font-semibold">Command</div>
-                                  <div>
-                                    <label className="block text-sm font-medium mb-1">Command</label>
-                                    <textarea
-                                      value={model.cmd || ''}
-                                      onChange={(e) => handleModelChange(key, 'cmd', e.target.value)}
-                                      rows={8}
-                                      className={`${inputClass} font-mono text-sm`}
-                                    />
-                                  </div>
-                                </div>
-
-                                <div className="rounded-lg border p-4 space-y-4" style={{ borderColor: 'var(--line-soft)' }}>
-                                  <div className="text-sm font-semibold">Env</div>
-                                  <div>
-                                    <label className="block text-sm font-medium mb-1">Environment Variables</label>
-                                    <textarea
-                                      value={envText}
-                                      onChange={(e) => handleEnvChange(key, e.target.value)}
-                                      rows={5}
-                                      placeholder={'CUDA_VISIBLE_DEVICES=1\nHF_TOKEN=...'}
-                                      className={`${inputClass} font-mono text-sm`}
-                                    />
-                                    <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                                      One `KEY=value` per line. Leave empty to remove model-specific environment overrides.
-                                    </p>
-                                  </div>
-                                </div>
-
-                                <div className="rounded-lg border p-4 space-y-4" style={{ borderColor: 'var(--line-soft)' }}>
-                                  <div className="text-sm font-semibold">Aliases And Filters</div>
-                                  {model.aliases ? (
-                                    <div>
-                                      <div className="flex items-center justify-between mb-1">
-                                        <label className="block text-sm font-medium">Aliases (comma-separated)</label>
-                                        <button
-                                          onClick={() => removeAliases(key)}
-                                          className="text-xs text-red-500 hover:text-red-700"
-                                        >
-                                          Remove aliases
-                                        </button>
-                                      </div>
-                                      <input
-                                        type="text"
-                                        value={(model.aliases || []).join(', ')}
-                                        onChange={(e) => handleAliasesChange(key, e.target.value)}
-                                        placeholder="alias-1, alias-2"
-                                        className={`${inputClass} text-sm`}
-                                      />
-                                    </div>
-                                  ) : (
-                                    <button
-                                      onClick={() => handleModelChange(key, 'aliases', [''])}
-                                      className="text-sm text-blue-500 hover:text-blue-700"
-                                    >
-                                      + Add aliases
-                                    </button>
-                                  )}
-
-                                  {model.filters ? (
-                                    <div>
-                                      <div className="flex items-center justify-between mb-1">
-                                        <label className="block text-sm font-medium">Filters (stripParams)</label>
-                                        <button
-                                          onClick={() => removeFilters(key)}
-                                          className="text-xs text-red-500 hover:text-red-700"
-                                        >
-                                          Remove filters
-                                        </button>
-                                      </div>
-                                      <input
-                                        type="text"
-                                        value={stripParamsValue}
-                                        onChange={(e) => handleFilterChange(key, e.target.value)}
-                                        placeholder="temperature, top_k, top_p"
-                                        className={`${inputClass} text-sm`}
-                                      />
-                                    </div>
-                                  ) : (
-                                    <button
-                                      onClick={() => handleFilterChange(key, '')}
-                                      className="text-sm text-blue-500 hover:text-blue-700"
-                                    >
-                                      + Add filters
-                                    </button>
-                                  )}
-                                </div>
-
-                                <div className="pt-2 border-t" style={{ borderColor: 'var(--line-soft)' }}>
-                                  {deleteConfirm === key ? (
-                                    <div className="flex items-center gap-3">
-                                      <span className="text-sm text-red-500">Delete this model?</span>
-                                      <button
-                                        onClick={() => deleteModel(key)}
-                                        className="text-sm px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700"
-                                      >
-                                        Confirm
-                                      </button>
-                                      <button
-                                        onClick={() => setDeleteConfirm(null)}
-                                        className="text-sm px-3 py-1 rounded"
-                                        style={{ background: 'var(--line-soft)' }}
-                                      >
-                                        Cancel
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <button
-                                      onClick={() => setDeleteConfirm(key)}
-                                      className="text-sm text-red-500 hover:text-red-700"
-                                    >
-                                      Delete model
-                                    </button>
-                                  )}
-                                </div>
-                                    </div>
-                                  )}
-                                </div>
-                              )
-                            })}
+                          <div className="rounded-lg border p-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(255,255,255,0.015)' }}>
+                            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                              Active config key
+                            </div>
+                            <div className="font-mono text-sm mt-1">{key}</div>
                           </div>
+
+                          {renderModelEditor(key, model)}
                         </div>
-                      ))}
+                      )}
                     </div>
-                  )}
-                </div>
-              ))}
+                  )
+                })
+              )}
             </div>
           </div>
         </>
