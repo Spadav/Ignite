@@ -106,7 +106,8 @@ Speech mode options:
 
 If you want to point Ignite at your own prebuilt `llama.cpp` runtime image, set:
 
-- `LLAMA_CPP_IMAGE=ghcr.io/yourname/llama.cpp:server-cuda-custom`
+- `LLAMA_CPP_IMAGE=spadav/ik-llama:latest` for the published `ik_llama.cpp` runtime image
+- or `LLAMA_CPP_IMAGE=ghcr.io/yourname/llama.cpp:server-cuda-custom` for your own custom build
 
 After changing ports, speech mode, or `LLAMA_CPP_IMAGE`, restart Ignite.
 
@@ -176,6 +177,14 @@ IGNITE_RESTART_POLICY=no
 ```
 
 When you change speech mode or the `llama.cpp` base image from the Ignite Settings page, Ignite saves that choice in `ignite-settings.json` inside your config folder. The host scripts reuse that saved value automatically on the next `start.sh`, `rebuild.sh`, or `update.sh`.
+
+If you want to try `ik_llama.cpp` in Ignite without building it yourself first, use:
+
+```bash
+LLAMA_CPP_IMAGE=spadav/ik-llama:latest
+```
+
+That image is intended as the `ik_llama.cpp` runtime option, while `ghcr.io/ggml-org/llama.cpp:server-cuda` remains the default mainline runtime.
 
 ## First Run
 

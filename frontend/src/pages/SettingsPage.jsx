@@ -259,7 +259,7 @@ function SettingsPage() {
                 placeholder="ghcr.io/ggml-org/llama.cpp:server-cuda"
               />
               <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
-                Example: `ghcr.io/yourname/llama.cpp:server-cuda-custom`. Saving persists this in Ignite settings and rebuilds `llama-runtime`. The startup scripts reuse the same saved value automatically.
+                Example: `spadav/ik-llama:latest` (ik_llama.cpp) or `ghcr.io/yourname/llama.cpp:server-cuda-custom`. Saving persists this in Ignite settings and rebuilds `llama-runtime`. The startup scripts reuse the same saved value automatically.
               </p>
             </div>
           </div>
