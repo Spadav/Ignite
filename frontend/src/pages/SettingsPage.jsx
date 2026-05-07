@@ -111,6 +111,7 @@ function SettingsPage() {
   const embeddingModelId = configuredModelIds.find((id) => /embed/i.test(id)) || 'YourEmbeddingModel'
   const speechRuntime = meta?.speech_runtime || null
   const speechAccelOptions = Array.isArray(meta?.speech_accel_options) ? meta.speech_accel_options : ['cpu', 'cuda']
+  const runtimeRefs = meta?.runtime_refs || null
 
   const chatExample = defaultModelMode === 'completion'
     ? `curl ${apiBaseUrl}/completions \\
@@ -234,6 +235,39 @@ function SettingsPage() {
 
       {meta?.managed_runtime && (
         <Section
+          title="llama.cpp Runtime"
+          description="Choose which base llama.cpp image Ignite should build the runtime from. Saving rebuilds and recreates the runtime container."
+        >
+          <div className="space-y-4">
+            <div className="rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
+              <div className="text-sm font-medium">Current configured base image</div>
+              <div className="mt-2 text-sm font-mono break-all" style={{ color: 'var(--text-muted)' }}>
+                {runtimeRefs?.llama_cpp_image || settings.llama_cpp_image || 'ghcr.io/ggml-org/llama.cpp:server-cuda'}
+              </div>
+              <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+                Use the upstream image by default, or point Ignite at your own prebuilt runtime image.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Base llama.cpp Image</label>
+              <input
+                type="text"
+                value={settings.llama_cpp_image || ''}
+                onChange={(e) => handleChange('llama_cpp_image', e.target.value)}
+                className={inputClass}
+                placeholder="ghcr.io/ggml-org/llama.cpp:server-cuda"
+              />
+              <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+                Example: `ghcr.io/yourname/llama.cpp:server-cuda-custom`. Saving persists this in Ignite settings and rebuilds `llama-runtime`. The startup scripts reuse the same saved value automatically.
+              </p>
+            </div>
+          </div>
+        </Section>
+      )}
+
+      {meta?.managed_runtime && (
+        <Section
           title="Speech Runtime"
           description="Choose whether Speaches should run on CPU or CUDA. Saving this setting recreates only the speech container."
         >
@@ -307,6 +341,7 @@ function SettingsPage() {
 IGNITE_CONFIG_DIR=/home/your-user/ignite-config
 IGNITE_PORT=3000
 LLAMA_SWAP_PORT=8090
+LLAMA_CPP_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
 SPEACHES_ACCEL=cuda`}
               </div>
             </div>

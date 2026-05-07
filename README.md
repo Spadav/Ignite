@@ -91,11 +91,12 @@ To rebuild manually:
 docker compose up -d --build
 ```
 
-You can also override the published ports and speech mode through `.env`:
+You can also override the published ports, speech mode, and runtime base image through `.env`:
 
 ```bash
 IGNITE_PORT=3000
 LLAMA_SWAP_PORT=8090
+LLAMA_CPP_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
 SPEACHES_ACCEL=cpu
 ```
 
@@ -103,7 +104,11 @@ Speech mode options:
 - `SPEACHES_ACCEL=cpu`
 - `SPEACHES_ACCEL=cuda`
 
-After changing ports or speech mode, restart Ignite.
+If you want to point Ignite at your own prebuilt `llama.cpp` runtime image, set:
+
+- `LLAMA_CPP_IMAGE=ghcr.io/yourname/llama.cpp:server-cuda-custom`
+
+After changing ports, speech mode, or `LLAMA_CPP_IMAGE`, restart Ignite.
 
 ## Stop
 
@@ -165,9 +170,12 @@ IGNITE_MODELS_DIR=/path/to/models
 IGNITE_CONFIG_DIR=/path/to/config
 IGNITE_PORT=3000
 LLAMA_SWAP_PORT=8090
+LLAMA_CPP_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
 SPEACHES_ACCEL=cpu
 IGNITE_RESTART_POLICY=no
 ```
+
+When you change speech mode or the `llama.cpp` base image from the Ignite Settings page, Ignite saves that choice in `ignite-settings.json` inside your config folder. The host scripts reuse that saved value automatically on the next `start.sh`, `rebuild.sh`, or `update.sh`.
 
 ## First Run
 

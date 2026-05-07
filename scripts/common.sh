@@ -2,14 +2,49 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="$ROOT_DIR/.env"
+
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+fi
+
 CONFIG_DIR="${IGNITE_CONFIG_DIR:-${SWAPDECK_CONFIG_DIR:-$ROOT_DIR/config}}"
 MODELS_DIR="${IGNITE_MODELS_DIR:-${SWAPDECK_MODELS_DIR:-$ROOT_DIR/models}}"
 IGNITE_PORT="${IGNITE_PORT:-3000}"
 LLAMA_SWAP_PORT="${LLAMA_SWAP_PORT:-8090}"
 SPEACHES_PORT="${SPEACHES_PORT:-8000}"
 SPEACHES_ACCEL="${SPEACHES_ACCEL:-cpu}"
+LLAMA_CPP_IMAGE="${LLAMA_CPP_IMAGE:-}"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 SPEACHES_CUDA_COMPOSE_FILE="$ROOT_DIR/docker-compose.speaches-cuda.yml"
+
+load_persisted_runtime_overrides() {
+  local settings_file="$CONFIG_DIR/ignite-settings.json"
+  [[ -f "$settings_file" ]] || return
+  command -v python3 >/dev/null 2>&1 || return
+
+  local persisted_speaches_accel persisted_llama_cpp_image
+  persisted_speaches_accel="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); print((data.get("speaches_accel") or "").strip())' "$settings_file" 2>/dev/null || true)"
+  persisted_llama_cpp_image="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); print((data.get("llama_cpp_image") or "").strip())' "$settings_file" 2>/dev/null || true)"
+
+  if [[ -z "${SPEACHES_ACCEL:-}" || "${SPEACHES_ACCEL}" == "cpu" ]]; then
+    if [[ "$persisted_speaches_accel" == "cpu" || "$persisted_speaches_accel" == "cuda" ]]; then
+      SPEACHES_ACCEL="$persisted_speaches_accel"
+    fi
+  fi
+
+  if [[ -z "${LLAMA_CPP_IMAGE:-}" && -n "$persisted_llama_cpp_image" ]]; then
+    LLAMA_CPP_IMAGE="$persisted_llama_cpp_image"
+  fi
+
+  export SPEACHES_ACCEL
+  export LLAMA_CPP_IMAGE
+}
+
+load_persisted_runtime_overrides
 
 print_step() {
   printf '\n[%s] %s\n' "$1" "$2"
@@ -67,4 +102,5 @@ print_paths() {
   printf 'API Port: %s\n' "$LLAMA_SWAP_PORT"
   printf 'Speech:   %s\n' "$SPEACHES_PORT"
   printf 'Speech Accel: %s\n' "$SPEACHES_ACCEL"
+  printf 'llama.cpp Image: %s\n' "${LLAMA_CPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}"
 }

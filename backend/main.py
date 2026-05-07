@@ -94,6 +94,7 @@ LOCAL_DEFAULT_SETTINGS = {
     "advanced_gpu_mode": False,
     "restart_on_boot": False,
     "speaches_accel": os.environ.get("SPEACHES_ACCEL", "cpu").strip().lower() or "cpu",
+    "llama_cpp_image": os.environ.get("LLAMA_CPP_IMAGE", "ghcr.io/ggml-org/llama.cpp:server-cuda").strip() or "ghcr.io/ggml-org/llama.cpp:server-cuda",
 }
 
 DOCKER_IGNITE_PORT = int(os.environ.get("IGNITE_PORT", "3000"))
@@ -109,6 +110,7 @@ DOCKER_DEFAULT_SETTINGS = {
     "advanced_gpu_mode": False,
     "restart_on_boot": False,
     "speaches_accel": os.environ.get("SPEACHES_ACCEL", "cpu").strip().lower() or "cpu",
+    "llama_cpp_image": os.environ.get("LLAMA_CPP_IMAGE", "ghcr.io/ggml-org/llama.cpp:server-cuda").strip() or "ghcr.io/ggml-org/llama.cpp:server-cuda",
 }
 
 DEFAULT_SETTINGS = DOCKER_DEFAULT_SETTINGS if IS_DOCKER else LOCAL_DEFAULT_SETTINGS
@@ -572,6 +574,146 @@ def recreate_speaches_container(accel: str) -> Dict[str, Any]:
     }
 
 
+def rebuild_runtime_container(llama_cpp_image: str) -> Dict[str, Any]:
+    image_ref = str(llama_cpp_image or "").strip()
+    if not image_ref:
+        raise HTTPException(status_code=400, detail="llama.cpp image is required.")
+
+    client = get_docker_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Docker runtime control is not available.")
+
+    repo_root = get_repo_root()
+    image_tag = "ignite-llama-runtime"
+
+    try:
+        build_stream = client.api.build(
+            path=str(repo_root),
+            dockerfile="docker/llama-runtime/Dockerfile",
+            tag=image_tag,
+            rm=True,
+            decode=True,
+            buildargs={"LLAMA_CPP_IMAGE": image_ref},
+        )
+        build_errors: List[str] = []
+        for chunk in build_stream:
+            if "error" in chunk:
+                build_errors.append(str(chunk.get("error") or "").strip())
+        if build_errors:
+            raise HTTPException(status_code=500, detail=f"Failed to build runtime image: {build_errors[-1]}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to build runtime image: {exc}")
+
+    try:
+        existing = client.containers.get(DOCKER_RUNTIME_CONTAINER)
+    except Exception:
+        existing = None
+
+    if existing is None:
+        raise HTTPException(status_code=503, detail="Runtime container was not found. Check the compose stack first.")
+
+    attrs = existing.attrs
+    network_names = list((attrs.get("NetworkSettings", {}) or {}).get("Networks", {}).keys())
+    restart_policy = (attrs.get("HostConfig", {}) or {}).get("RestartPolicy") or {"Name": "no"}
+    labels = dict((attrs.get("Config", {}) or {}).get("Labels") or {})
+    environment: Dict[str, str] = {}
+    for entry in (attrs.get("Config", {}) or {}).get("Env", []) or []:
+        if "=" in entry:
+            key, value = entry.split("=", 1)
+            environment[key] = value
+
+    volumes: Dict[str, Dict[str, str]] = {}
+    for mount in attrs.get("Mounts", []) or []:
+        mount_type = mount.get("Type")
+        destination = mount.get("Destination")
+        mode = mount.get("Mode") or "rw"
+        if mount_type == "volume":
+            volumes[mount.get("Name")] = {"bind": destination, "mode": mode}
+        elif mount_type == "bind":
+            volumes[mount.get("Source")] = {"bind": destination, "mode": mode}
+
+    ports: Dict[str, Any] = {}
+    port_bindings = (attrs.get("HostConfig", {}) or {}).get("PortBindings") or {}
+    for container_port, bindings in port_bindings.items():
+        if not bindings:
+            continue
+        binding = bindings[0]
+        host_ip = binding.get("HostIp") or "0.0.0.0"
+        host_port = int(binding.get("HostPort") or os.environ.get("LLAMA_SWAP_PORT", str(DOCKER_LLAMA_SWAP_PORT)))
+        ports[container_port] = host_port if host_ip in {"0.0.0.0", ""} else (host_ip, host_port)
+
+    command = (attrs.get("Config", {}) or {}).get("Cmd")
+    entrypoint = (attrs.get("Config", {}) or {}).get("Entrypoint")
+    working_dir = (attrs.get("Config", {}) or {}).get("WorkingDir") or None
+
+    if not labels.get("com.docker.compose.project") or not labels.get("com.docker.compose.service"):
+        try:
+            ignite_container = client.containers.get("ignite")
+            ignite_labels = dict((ignite_container.attrs.get("Config", {}) or {}).get("Labels") or {})
+        except Exception:
+            ignite_labels = {}
+
+        image_id = ""
+        try:
+            image_id = client.images.get(image_tag).id
+        except Exception:
+            image_id = ""
+
+        labels.update({
+            "com.docker.compose.project": ignite_labels.get("com.docker.compose.project", "ignite"),
+            "com.docker.compose.project.config_files": ignite_labels.get("com.docker.compose.project.config_files", str(get_repo_root() / "docker-compose.yml")),
+            "com.docker.compose.project.working_dir": ignite_labels.get("com.docker.compose.project.working_dir", str(get_repo_root())),
+            "com.docker.compose.version": ignite_labels.get("com.docker.compose.version", ""),
+            "com.docker.compose.service": "llama-runtime",
+            "com.docker.compose.container-number": "1",
+            "com.docker.compose.oneoff": "False",
+            "com.docker.compose.image": image_id,
+        })
+        labels = {key: value for key, value in labels.items() if value != ""}
+
+    try:
+        existing.stop(timeout=20)
+    except Exception:
+        pass
+    try:
+        existing.remove()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to remove existing runtime container: {exc}")
+
+    try:
+        container = client.containers.run(
+            image_tag,
+            name=DOCKER_RUNTIME_CONTAINER,
+            detach=True,
+            ports=ports,
+            volumes=volumes,
+            environment=environment,
+            labels=labels,
+            restart_policy=restart_policy,
+            network=(network_names[0] if network_names else None),
+            command=command,
+            entrypoint=entrypoint,
+            working_dir=working_dir,
+            device_requests=[docker.types.DeviceRequest(count=-1, capabilities=[["gpu"]])],
+        )
+        for extra_network in network_names[1:]:
+            try:
+                client.networks.get(extra_network).connect(container)
+            except Exception:
+                pass
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to start rebuilt runtime container: {exc}")
+
+    return {
+        "ok": True,
+        "image": image_tag,
+        "llama_cpp_image": image_ref,
+        "container": DOCKER_RUNTIME_CONTAINER,
+    }
+
+
 def load_settings() -> Dict[str, Any]:
     """Load settings from settings.json, falling back to defaults if missing."""
     settings = dict(DEFAULT_SETTINGS)
@@ -668,6 +810,7 @@ def parse_current_runtime_refs() -> Dict[str, Any]:
     env_ignite_version = os.environ.get("IGNITE_APP_VERSION", "").strip()
     env_llama_cpp_image = os.environ.get("LLAMA_CPP_IMAGE_REF", "").strip()
     env_llmfit_image = os.environ.get("LLMFIT_IMAGE_REF", "").strip()
+    configured_llama_cpp_image = str(settings.get("llama_cpp_image") or "").strip()
 
     repo_root = get_repo_root()
     runtime_dockerfile = read_text_if_exists(repo_root / "docker" / "llama-runtime" / "Dockerfile")
@@ -694,7 +837,7 @@ def parse_current_runtime_refs() -> Dict[str, Any]:
 
     return {
         "ignite_version": env_ignite_version or ignite_version or "unknown",
-        "llama_cpp_image": env_llama_cpp_image or llama_cpp_image or "ghcr.io/ggml-org/llama.cpp:server-cuda",
+        "llama_cpp_image": configured_llama_cpp_image or env_llama_cpp_image or llama_cpp_image or "ghcr.io/ggml-org/llama.cpp:server-cuda",
         "llmfit_image": env_llmfit_image or llmfit_image or "ghcr.io/alexsjones/llmfit:latest",
     }
 
@@ -2606,6 +2749,7 @@ def api_get_settings():
     """Get current settings"""
     docker_restart_policies = get_managed_docker_restart_policies() if is_docker_managed_runtime() else {}
     docker_restart_policy = get_docker_restart_policy_name() if is_docker_managed_runtime() else None
+    runtime_refs = parse_current_runtime_refs() if is_docker_managed_runtime() else None
     restart_on_boot = (
         docker_restart_policy == "unless-stopped"
         if docker_restart_policy is not None
@@ -2626,6 +2770,7 @@ def api_get_settings():
                 "models_dir": os.environ.get("IGNITE_MODELS_DIR", os.environ.get("SWAPDECK_MODELS_DIR", "./models")),
                 "config_dir": os.environ.get("IGNITE_CONFIG_DIR", os.environ.get("SWAPDECK_CONFIG_DIR", "./config")),
             } if is_docker_managed_runtime() else None,
+            "runtime_refs": runtime_refs,
             "speech_runtime": get_speaches_runtime_info() if is_docker_managed_runtime() else None,
             "speech_accel_options": ["cpu", "cuda"] if is_docker_managed_runtime() else None,
         },
@@ -2637,6 +2782,7 @@ def api_save_settings(new_settings: Dict[str, Any]):
     """Save settings to settings.json and update in-memory values"""
     global settings
     requested_speaches_accel = None
+    requested_llama_cpp_image = None
     # Only allow known keys
     for key in DEFAULT_SETTINGS:
         if key in new_settings:
@@ -2648,6 +2794,13 @@ def api_save_settings(new_settings: Dict[str, Any]):
         if requested_speaches_accel not in {"cpu", "cuda"}:
             raise HTTPException(status_code=400, detail="Speech acceleration must be 'cpu' or 'cuda'.")
         settings["speaches_accel"] = requested_speaches_accel
+    if is_docker_managed_runtime() and "llama_cpp_image" in new_settings:
+        requested_llama_cpp_image = str(new_settings["llama_cpp_image"] or "").strip()
+        if not requested_llama_cpp_image:
+            raise HTTPException(status_code=400, detail="llama.cpp image is required.")
+        settings["llama_cpp_image"] = requested_llama_cpp_image
+    if requested_llama_cpp_image is not None:
+        rebuild_runtime_container(requested_llama_cpp_image)
     save_settings(settings)
     if requested_speaches_accel is not None:
         recreate_speaches_container(requested_speaches_accel)
