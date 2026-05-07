@@ -9,6 +9,58 @@ function percentile(values, p) {
   return sorted[index]
 }
 
+function decodeBase64Utf8(value) {
+  if (!value || typeof value !== 'string') return ''
+  try {
+    const binary = window.atob(value)
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    return new TextDecoder().decode(bytes)
+  } catch {
+    return ''
+  }
+}
+
+function tryParseJson(value) {
+  if (!value) return null
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
+}
+
+function decodeCapturePayload(capture) {
+  if (!capture || typeof capture !== 'object') {
+    return {
+      requestText: '',
+      requestJson: null,
+      responseText: '',
+      responseJson: null,
+      requestMessages: [],
+      responseMessage: '',
+    }
+  }
+
+  const requestText = decodeBase64Utf8(capture.req_body)
+  const responseText = decodeBase64Utf8(capture.resp_body)
+  const requestJson = tryParseJson(requestText)
+  const responseJson = tryParseJson(responseText)
+  const requestMessages = Array.isArray(requestJson?.messages) ? requestJson.messages : []
+  const responseMessage =
+    responseJson?.choices?.[0]?.message?.content ||
+    responseJson?.choices?.[0]?.text ||
+    ''
+
+  return {
+    requestText,
+    requestJson,
+    responseText,
+    responseJson,
+    requestMessages,
+    responseMessage,
+  }
+}
+
 function RuntimePage() {
   const navigate = useNavigate()
   const { running } = useServiceStatus(15000)
@@ -22,6 +74,7 @@ function RuntimePage() {
   const [captureError, setCaptureError] = useState('')
   const [captureData, setCaptureData] = useState(null)
   const [captureId, setCaptureId] = useState(null)
+  const [captureView, setCaptureView] = useState('decoded')
 
   useEffect(() => {
     let cancelled = false
@@ -127,6 +180,7 @@ function RuntimePage() {
       setCaptureLoading(true)
       setCaptureError('')
       setCaptureData(null)
+      setCaptureView('decoded')
       const response = await fetch(`/api/runtime/captures/${id}`)
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(data.detail || 'Failed to load capture')
@@ -169,6 +223,7 @@ function RuntimePage() {
   const p95 = percentile(tokenSpeeds, 95)
   const p99 = percentile(tokenSpeeds, 99)
   const activity = [...metrics].sort((a, b) => Number(b.id || 0) - Number(a.id || 0)).slice(0, 15)
+  const decodedCapture = useMemo(() => decodeCapturePayload(captureData), [captureData])
 
   return (
     <div className="p-6">
@@ -381,12 +436,26 @@ function RuntimePage() {
               <div>
                 <h3 className="text-lg font-semibold">Capture {captureId}</h3>
                 <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
-                  Raw capture payload returned by the runtime.
+                  Decoded request and response payloads from the runtime, with raw JSON still available.
                 </p>
               </div>
-              <button onClick={() => setCaptureOpen(false)} className="btn btn-secondary">
-                Close
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCaptureView('decoded')}
+                  className={`px-3 py-1 rounded ${captureView === 'decoded' ? 'btn-primary text-white' : 'btn-secondary'}`}
+                >
+                  Decoded
+                </button>
+                <button
+                  onClick={() => setCaptureView('raw')}
+                  className={`px-3 py-1 rounded ${captureView === 'raw' ? 'btn-primary text-white' : 'btn-secondary'}`}
+                >
+                  Raw
+                </button>
+                <button onClick={() => setCaptureOpen(false)} className="btn btn-secondary">
+                  Close
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-auto rounded-lg border p-3" style={{ borderColor: 'var(--line-soft)' }}>
@@ -394,8 +463,69 @@ function RuntimePage() {
                 <div style={{ color: 'var(--text-muted)' }}>Loading capture...</div>
               ) : captureError ? (
                 <div style={{ color: '#fda4af' }}>{captureError}</div>
-              ) : (
+              ) : captureView === 'raw' ? (
                 <pre className="text-sm whitespace-pre-wrap break-words">{JSON.stringify(captureData, null, 2)}</pre>
+              ) : (
+                <div className="space-y-6 text-sm">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)' }}>
+                      <div className="text-xs uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Request</div>
+                      <div className="mt-3 space-y-2">
+                        <div><span style={{ color: 'var(--text-muted)' }}>Path:</span> <span className="font-mono">{captureData?.req_path || '-'}</span></div>
+                        <div><span style={{ color: 'var(--text-muted)' }}>Model:</span> <span className="font-mono">{decodedCapture.requestJson?.model || '-'}</span></div>
+                        <div><span style={{ color: 'var(--text-muted)' }}>Max Tokens:</span> <span className="font-mono">{decodedCapture.requestJson?.max_tokens ?? '-'}</span></div>
+                      </div>
+                    </div>
+                    <div className="rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)' }}>
+                      <div className="text-xs uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Response</div>
+                      <div className="mt-3 space-y-2">
+                        <div><span style={{ color: 'var(--text-muted)' }}>Status:</span> <span className="font-mono">{captureData?.resp_headers?.['Content-Type'] ? '200' : '-'}</span></div>
+                        <div><span style={{ color: 'var(--text-muted)' }}>Runtime:</span> <span className="font-mono">{captureData?.resp_headers?.Server || '-'}</span></div>
+                        <div><span style={{ color: 'var(--text-muted)' }}>Finish:</span> <span className="font-mono">{decodedCapture.responseJson?.choices?.[0]?.finish_reason || '-'}</span></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)' }}>
+                    <div className="text-xs uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Input Messages</div>
+                    <div className="mt-3 space-y-3">
+                      {decodedCapture.requestMessages.length > 0 ? decodedCapture.requestMessages.map((message, index) => (
+                        <div key={`${message.role || 'message'}-${index}`} className="rounded-lg border p-3" style={{ borderColor: 'rgba(148, 163, 184, 0.2)' }}>
+                          <div className="text-xs uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>
+                            {message.role || 'message'}
+                          </div>
+                          <div className="mt-2 whitespace-pre-wrap break-words">
+                            {typeof message.content === 'string' ? message.content : JSON.stringify(message.content, null, 2)}
+                          </div>
+                        </div>
+                      )) : (
+                        <div style={{ color: 'var(--text-muted)' }}>No chat history found in the decoded request body.</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)' }}>
+                    <div className="text-xs uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Assistant Output</div>
+                    <div className="mt-3 whitespace-pre-wrap break-words">
+                      {decodedCapture.responseMessage || decodedCapture.responseText || 'No decoded response body.'}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)' }}>
+                      <div className="text-xs uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Decoded Request JSON</div>
+                      <pre className="mt-3 whitespace-pre-wrap break-words">
+                        {decodedCapture.requestJson ? JSON.stringify(decodedCapture.requestJson, null, 2) : decodedCapture.requestText || 'Unable to decode request body.'}
+                      </pre>
+                    </div>
+                    <div className="rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)' }}>
+                      <div className="text-xs uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Decoded Response JSON</div>
+                      <pre className="mt-3 whitespace-pre-wrap break-words">
+                        {decodedCapture.responseJson ? JSON.stringify(decodedCapture.responseJson, null, 2) : decodedCapture.responseText || 'Unable to decode response body.'}
+                      </pre>
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
           </div>

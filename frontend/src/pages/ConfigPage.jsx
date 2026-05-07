@@ -809,7 +809,7 @@ function ConfigPage() {
     const thinkingEnabled = !isThinkingDisabled(model.cmd)
 
     return (
-      <div className="space-y-4">
+      <div key={key} className="space-y-4">
         <div className="rounded-lg border p-4 space-y-4" style={{ borderColor: 'var(--line-soft)' }}>
           <div className="text-sm font-semibold">General</div>
           <div>
@@ -1611,6 +1611,7 @@ function ConfigPage() {
                   const selectedProfileKey = getSelectedFamilyProfile(familyName, familyEntries)
                   const selectedPair = familyEntries.find(([profileKey]) => profileKey === selectedProfileKey) || familyEntries[0]
                   const [key, model] = selectedPair
+                  const profileLabel = getModelProfile(key, model)
 
                   return (
                     <div key={familyName} className="card">
@@ -1620,7 +1621,13 @@ function ConfigPage() {
                           className="flex-1 flex items-center justify-between text-left"
                         >
                           <div>
-                            <div className="font-semibold text-lg">{familyName}</div>
+                            <div className="font-semibold text-lg">{key}</div>
+                            <div className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
+                              {model?.name || key}
+                            </div>
+                            <div className="text-xs uppercase tracking-[0.14em] mt-2" style={{ color: 'var(--text-muted)' }}>
+                              Family: {familyName}{profileLabel ? ` • Profile: ${profileLabel}` : ''}
+                            </div>
                             <div className="flex flex-wrap items-center gap-2 mt-2">
                               {folders.map((folderName) => (
                                 <span

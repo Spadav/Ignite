@@ -1606,6 +1606,19 @@ def get_llama_swap_runtime_overview() -> Dict[str, Any]:
     metrics: List[Dict[str, Any]] = []
     inflight_total = 0
 
+    def normalize_metric_item(item: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(item)
+        tokens = item.get("tokens")
+        if isinstance(tokens, dict):
+            # Preserve the raw nested metrics from newer llama-swap while
+            # restoring the flat fields the current frontend expects.
+            normalized["cache_tokens"] = tokens.get("cache_tokens", normalized.get("cache_tokens", -1))
+            normalized["input_tokens"] = tokens.get("input_tokens", normalized.get("input_tokens", 0))
+            normalized["output_tokens"] = tokens.get("output_tokens", normalized.get("output_tokens", 0))
+            normalized["prompt_per_second"] = tokens.get("prompt_per_second", normalized.get("prompt_per_second", 0))
+            normalized["tokens_per_second"] = tokens.get("tokens_per_second", normalized.get("tokens_per_second", 0))
+        return normalized
+
     try:
         with requests.get(f"{base_url}/api/events", stream=True, timeout=(1.0, 2.0)) as response:
             if response.status_code != 200:
@@ -1642,7 +1655,7 @@ def get_llama_swap_runtime_overview() -> Dict[str, Any]:
                                     )
                                 models = normalized
                             elif payload_type == "metrics" and isinstance(payload, list):
-                                metrics = [item for item in payload if isinstance(item, dict)]
+                                metrics = [normalize_metric_item(item) for item in payload if isinstance(item, dict)]
                             elif payload_type == "inflight" and isinstance(payload, dict):
                                 inflight_total = int(payload.get("total") or 0)
                         except Exception:
