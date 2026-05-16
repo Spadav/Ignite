@@ -30,6 +30,8 @@ function UpdatesPage() {
   const [loading, setLoading] = useState(true)
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState('')
+  const [actionRunning, setActionRunning] = useState('')
+  const [actionResult, setActionResult] = useState(null)
 
   const loadUpdates = async (refresh = false) => {
     try {
@@ -53,6 +55,25 @@ function UpdatesPage() {
     loadUpdates(true)
   }, [])
 
+  const runUpdateAction = async (component) => {
+    if (!component?.update_action || component.update_available_in_ui === false) return
+    const action = component.update_action
+    try {
+      setActionRunning(component.id)
+      setActionResult(null)
+      setError('')
+      const response = await fetch(`/api/updates/actions/${encodeURIComponent(action)}`, { method: 'POST' })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.detail || `Failed to update ${component.name}`)
+      setActionResult(payload)
+      await loadUpdates(true)
+    } catch (err) {
+      setError(err.message || `Failed to update ${component.name}`)
+    } finally {
+      setActionRunning('')
+    }
+  }
+
   if (loading) return <p className="p-6">Loading...</p>
 
   return (
@@ -61,7 +82,7 @@ function UpdatesPage() {
         <div>
           <h2 className="text-2xl font-semibold tracking-tight">Updates</h2>
           <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
-            Check the versions Ignite is using right now and whether upstream has moved ahead.
+            Check and refresh the services Ignite is using without running terminal commands.
           </p>
         </div>
         <button onClick={() => loadUpdates(true)} disabled={checking} className="btn btn-primary">
@@ -72,6 +93,16 @@ function UpdatesPage() {
       {error && (
         <div className="mb-4 px-4 py-2 rounded-lg text-sm border bg-red-100 text-red-800" style={{ borderColor: 'var(--line-soft)' }}>
           {error}
+        </div>
+      )}
+
+      {actionResult && (
+        <div className="mb-4 px-4 py-3 rounded-lg text-sm border" style={{ borderColor: 'rgba(34, 197, 94, 0.35)', background: 'rgba(34, 197, 94, 0.14)', color: '#bbf7d0' }}>
+          <div className="font-semibold">{actionResult.title || 'Update complete'}</div>
+          <div className="mt-1">{actionResult.message || 'The selected service was refreshed.'}</div>
+          {actionResult.versions?.llama_cpp_version && (
+            <div className="font-mono mt-2">llama.cpp: {actionResult.versions.llama_cpp_version}</div>
+          )}
         </div>
       )}
 
@@ -86,12 +117,12 @@ function UpdatesPage() {
       )}
 
       <div className="card mb-6">
-        <h3 className="text-lg font-semibold mb-2">How Updates Work</h3>
+        <h3 className="text-lg font-semibold mb-2">Safe Update Buttons</h3>
         <div className="space-y-2 text-sm" style={{ color: 'var(--text-muted)' }}>
-          <div>- `llama-swap` is pinned in the runtime image, so Ignite can compare it directly with the latest upstream release.</div>
-          <div>- `llama.cpp` is read from the running runtime container, so Ignite can show the actual build and commit in use.</div>
-          <div>- Use `Check For Updates` to refresh upstream metadata and changelog links.</div>
-          <div>- If the runtime is stopped, Ignite can still check upstream, but it cannot read the currently installed runtime versions.</div>
+          <div>- Update Runtime refreshes the llama.cpp image currently selected in Settings, rebuilds the runtime wrapper, and restarts only the model runtime.</div>
+          <div>- Update Speech refreshes the selected Speaches CPU/CUDA image and restarts the speech service.</div>
+          <div>- Update llmfit refreshes the recommendation service image and restarts that service.</div>
+          <div>- Your model files and config folders are mounted volumes; these update actions do not delete them.</div>
         </div>
         {data?.checked_at && (
           <p className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>
@@ -132,6 +163,19 @@ function UpdatesPage() {
               </div>
 
               <div className="flex flex-wrap gap-2 mb-4">
+                {component.update_available_in_ui !== false && component.update_action ? (
+                  <button
+                    onClick={() => runUpdateAction(component)}
+                    disabled={Boolean(actionRunning)}
+                    className="btn btn-primary text-sm"
+                  >
+                    {actionRunning === component.id ? 'Updating...' : `Update ${component.name}`}
+                  </button>
+                ) : (
+                  <button className="btn btn-secondary text-sm" disabled title={component.update_disabled_reason || 'Not available yet'}>
+                    Update Not Automated
+                  </button>
+                )}
                 <a href={component.changelog_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-sm">
                   Open Changelog
                 </a>
@@ -139,17 +183,19 @@ function UpdatesPage() {
                   Open Upstream
                 </a>
               </div>
-
-              <div className="rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)' }}>
-                <div className="text-sm font-semibold mb-2">{component.update_path_label || 'Update Path'}</div>
-                <div className="font-mono text-sm rounded-lg border p-3 mb-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
-                  {component.update_script}
+              {component.update_available_in_ui === false && component.update_disabled_reason && (
+                <div className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
+                  {component.update_disabled_reason}
                 </div>
-                {(component.manual_update || []).length > 0 && (
-                  <>
-                    <div className="text-sm font-medium mb-2">
-                      {component.version_upgrade_label || 'Manual Commands'}
-                    </div>
+              )}
+
+              {(component.update_script || (component.manual_update || []).length > 0) && (
+                <details className="rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)' }}>
+                  <summary className="text-sm font-semibold cursor-pointer">Advanced: show commands</summary>
+                  <div className="font-mono text-sm rounded-lg border p-3 my-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
+                    {component.update_script || 'No script available'}
+                  </div>
+                  {(component.manual_update || []).length > 0 && (
                     <div className="space-y-2">
                       {(component.manual_update || []).map((line, index) => (
                         <div key={index} className="font-mono text-sm rounded-lg border p-3 break-all" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.04)' }}>
@@ -157,9 +203,9 @@ function UpdatesPage() {
                         </div>
                       ))}
                     </div>
-                  </>
-                )}
-              </div>
+                  )}
+                </details>
+              )}
             </div>
           )
         })}

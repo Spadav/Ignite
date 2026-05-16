@@ -39,6 +39,11 @@ function ModelsPage() {
   const [speechModels, setSpeechModels] = useState([])
   const [speechLoading, setSpeechLoading] = useState(true)
   const [speechError, setSpeechError] = useState('')
+  const [speechAliases, setSpeechAliases] = useState({})
+  const [speechAliasRows, setSpeechAliasRows] = useState([])
+  const [speechAliasModalOpen, setSpeechAliasModalOpen] = useState(false)
+  const [speechAliasSaving, setSpeechAliasSaving] = useState(false)
+  const [speechAliasMessage, setSpeechAliasMessage] = useState('')
 
   const handleDelete = async (filename) => {
     if (!confirm(`Delete ${filename}?`)) return
@@ -186,12 +191,19 @@ function ModelsPage() {
     try {
       setSpeechLoading(true)
       setSpeechError('')
-      const response = await fetch('/api/speech/models')
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.detail || 'Failed to load installed speech models')
+      const [modelsResponse, aliasesResponse] = await Promise.all([
+        fetch('/api/speech/models'),
+        fetch('/api/speech/aliases')
+      ])
+      const data = await modelsResponse.json().catch(() => ({}))
+      const aliasesData = await aliasesResponse.json().catch(() => ({}))
+      if (!modelsResponse.ok) throw new Error(data.detail || 'Failed to load installed speech models')
+      if (!aliasesResponse.ok) throw new Error(aliasesData.detail || 'Failed to load speech aliases')
       setSpeechModels(Array.isArray(data.data) ? data.data : [])
+      setSpeechAliases(aliasesData.aliases || {})
     } catch (error) {
       setSpeechModels([])
+      setSpeechAliases({})
       setSpeechError(error.message || 'Failed to load installed speech models')
     } finally {
       setSpeechLoading(false)
@@ -212,6 +224,70 @@ function ModelsPage() {
     const params = new URLSearchParams()
     if (modelId) params.set('model', modelId)
     navigate(`/playground${params.toString() ? `?${params.toString()}` : ''}`)
+  }
+
+  const openSpeechAliasModal = () => {
+    const rows = Object.entries(speechAliases || {}).map(([alias, target]) => ({ alias, target }))
+    setSpeechAliasRows(rows.length > 0 ? rows : [{ alias: 'whisper-1', target: '' }])
+    setSpeechAliasMessage('')
+    setSpeechAliasModalOpen(true)
+  }
+
+  const updateSpeechAliasRow = (index, field, value) => {
+    setSpeechAliasRows(prev => prev.map((row, rowIndex) => (
+      rowIndex === index ? { ...row, [field]: value } : row
+    )))
+  }
+
+  const addSpeechAliasRow = () => {
+    setSpeechAliasRows(prev => [...prev, { alias: '', target: '' }])
+  }
+
+  const removeSpeechAliasRow = (index) => {
+    setSpeechAliasRows(prev => prev.filter((_, rowIndex) => rowIndex !== index))
+  }
+
+  const applyOpenAISpeechDefaults = () => {
+    const ttsModel = speechModels.find(item => item.task === 'text-to-speech')?.id || ''
+    const sttModel = speechModels.find(item => item.task === 'automatic-speech-recognition')?.id || ''
+    setSpeechAliasRows([
+      { alias: 'whisper-1', target: sttModel },
+      { alias: 'tts-1', target: ttsModel },
+      { alias: 'tts-1-hd', target: ttsModel },
+    ])
+  }
+
+  const saveSpeechAliases = async () => {
+    const aliases = {}
+    for (const row of speechAliasRows) {
+      const alias = row.alias.trim()
+      const target = row.target.trim()
+      if (!alias && !target) continue
+      if (!alias || !target) {
+        setSpeechAliasMessage('Every alias row needs both an alias and a target model.')
+        return
+      }
+      aliases[alias] = target
+    }
+
+    try {
+      setSpeechAliasSaving(true)
+      setSpeechAliasMessage('')
+      const response = await fetch('/api/speech/aliases', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ aliases })
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || 'Failed to save speech aliases')
+      setSpeechAliases(data.aliases || aliases)
+      setSpeechAliasMessage('Aliases saved. Speaches was restarted so they are active now.')
+      await refreshSpeechModels()
+    } catch (error) {
+      setSpeechAliasMessage(error.message || 'Failed to save speech aliases')
+    } finally {
+      setSpeechAliasSaving(false)
+    }
   }
 
   return (
@@ -306,6 +382,90 @@ function ModelsPage() {
                   {configuringModel === presetPicker.filename ? 'Adding...' : 'Use Custom'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {speechAliasModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(8, 10, 14, 0.7)' }}
+          onClick={() => setSpeechAliasModalOpen(false)}
+        >
+          <div
+            className="card w-full max-w-4xl max-h-[85vh] overflow-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <h3 className="text-xl font-semibold">Speech Aliases</h3>
+                <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
+                  Map OpenAI-style model names like whisper-1 or tts-1 to installed Speaches models. Stored in models/audio/model_aliases.json.
+                </p>
+              </div>
+              <button
+                onClick={() => setSpeechAliasModalOpen(false)}
+                className="px-3 py-2 rounded-lg text-sm"
+                style={{ background: 'var(--line-soft)' }}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap mb-4">
+              <button onClick={applyOpenAISpeechDefaults} className="btn btn-secondary text-sm">
+                Use OpenAI Defaults
+              </button>
+              <button onClick={addSpeechAliasRow} className="btn btn-secondary text-sm">
+                Add Alias
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {speechAliasRows.map((row, index) => (
+                <div key={`${index}-${row.alias}`} className="grid grid-cols-1 md:grid-cols-[1fr_2fr_auto] gap-2 items-center">
+                  <input
+                    value={row.alias}
+                    onChange={(e) => updateSpeechAliasRow(index, 'alias', e.target.value)}
+                    placeholder="whisper-1"
+                    className="w-full px-3 py-2 rounded-lg border dark:border-gray-600 dark:bg-gray-700"
+                  />
+                  <select
+                    value={row.target}
+                    onChange={(e) => updateSpeechAliasRow(index, 'target', e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border dark:border-gray-600 dark:bg-gray-700"
+                  >
+                    <option value="">Select installed speech model...</option>
+                    {speechModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.id} ({(model.task || 'speech').replaceAll('-', ' ')})
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => removeSpeechAliasRow(index)}
+                    className="btn btn-danger text-sm"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {speechAliasMessage && (
+              <p className={`text-sm mt-4 ${speechAliasMessage.includes('saved') ? 'text-green-600' : 'text-red-500'}`}>
+                {speechAliasMessage}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2 mt-6">
+              <button onClick={() => setSpeechAliasModalOpen(false)} className="btn btn-secondary">
+                Cancel
+              </button>
+              <button onClick={saveSpeechAliases} disabled={speechAliasSaving} className="btn btn-primary">
+                {speechAliasSaving ? 'Saving...' : 'Save Aliases'}
+              </button>
             </div>
           </div>
         </div>
@@ -479,11 +639,21 @@ function ModelsPage() {
               </div>
             )}
             <div className="rounded-lg border p-4 mb-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.06)' }}>
-              <div>
-                <h4 className="font-semibold">Installed Speech Models</h4>
-                <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
-                  STT and TTS models available through Speaches.
-                </p>
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div>
+                  <h4 className="font-semibold">Installed Speech Models</h4>
+                  <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
+                    STT and TTS models available through Speaches.
+                  </p>
+                  {Object.keys(speechAliases || {}).length > 0 && (
+                    <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+                      Aliases: {Object.entries(speechAliases).map(([alias, target]) => `${alias} -> ${target}`).join(', ')}
+                    </p>
+                  )}
+                </div>
+                <button onClick={openSpeechAliasModal} className="btn btn-secondary text-sm">
+                  Speech Aliases
+                </button>
               </div>
               {speechLoading ? (
                 <p className="mt-3" style={{ color: 'var(--text-muted)' }}>Loading speech models...</p>

@@ -36,7 +36,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, Field
 import uvicorn
 
 # Configuration
@@ -94,7 +94,8 @@ LOCAL_DEFAULT_SETTINGS = {
     "advanced_gpu_mode": False,
     "restart_on_boot": False,
     "speaches_accel": os.environ.get("SPEACHES_ACCEL", "cpu").strip().lower() or "cpu",
-    "llama_cpp_image": os.environ.get("LLAMA_CPP_IMAGE", "ghcr.io/ggml-org/llama.cpp:server-cuda").strip() or "ghcr.io/ggml-org/llama.cpp:server-cuda",
+    "llama_cpp_image": os.environ.get("LLAMA_CPP_IMAGE", "spadav/llama-cpp-server:latest").strip() or "spadav/llama-cpp-server:latest",
+    "llama_swap_version": os.environ.get("LLAMA_SWAP_VERSION", "211").strip().lstrip("v") or "211",
 }
 
 DOCKER_IGNITE_PORT = int(os.environ.get("IGNITE_PORT", "3000"))
@@ -110,7 +111,8 @@ DOCKER_DEFAULT_SETTINGS = {
     "advanced_gpu_mode": False,
     "restart_on_boot": False,
     "speaches_accel": os.environ.get("SPEACHES_ACCEL", "cpu").strip().lower() or "cpu",
-    "llama_cpp_image": os.environ.get("LLAMA_CPP_IMAGE", "ghcr.io/ggml-org/llama.cpp:server-cuda").strip() or "ghcr.io/ggml-org/llama.cpp:server-cuda",
+    "llama_cpp_image": os.environ.get("LLAMA_CPP_IMAGE", "spadav/llama-cpp-server:latest").strip() or "spadav/llama-cpp-server:latest",
+    "llama_swap_version": os.environ.get("LLAMA_SWAP_VERSION", "211").strip().lstrip("v") or "211",
 }
 
 DEFAULT_SETTINGS = DOCKER_DEFAULT_SETTINGS if IS_DOCKER else LOCAL_DEFAULT_SETTINGS
@@ -118,6 +120,11 @@ DOCKER_SOCKET_PATH = "/var/run/docker.sock"
 DOCKER_RUNTIME_CONTAINER = os.environ.get("IGNITE_RUNTIME_CONTAINER", "llama-runtime")
 DOCKER_LLMFIT_CONTAINER = os.environ.get("IGNITE_LLMFIT_CONTAINER", "llmfit")
 DOCKER_SPEACHES_CONTAINER = os.environ.get("IGNITE_SPEACHES_CONTAINER", "speaches")
+SPEACHES_CACHE_CONTAINER_DIR = "/home/ubuntu/.cache/huggingface/hub"
+SPEACHES_ALIAS_CONTAINER_FILE = "/home/ubuntu/speaches/model_aliases.json"
+SPEACHES_AUDIO_SUBDIR = Path("audio")
+SPEACHES_CACHE_SUBDIR = Path("audio") / "huggingface"
+SPEACHES_ALIAS_FILENAME = "model_aliases.json"
 DOCKER_SUPPORT_CONTAINERS = [
     name for name in [DOCKER_LLMFIT_CONTAINER, DOCKER_SPEACHES_CONTAINER] if name
 ]
@@ -466,6 +473,133 @@ def get_speaches_runtime_info() -> Dict[str, Any]:
     return info
 
 
+def normalize_llama_swap_version(version: str) -> str:
+    normalized = str(version or "").strip().lstrip("v")
+    if not normalized:
+        raise HTTPException(status_code=400, detail="llama-swap version is required.")
+    if not re.fullmatch(r"\d+", normalized):
+        raise HTTPException(status_code=400, detail="llama-swap version must be a numeric release, for example 214.")
+    return normalized
+
+
+def get_speaches_cache_host_dir() -> str:
+    models_dir = (
+        os.environ.get("IGNITE_MODELS_DIR")
+        or os.environ.get("SWAPDECK_MODELS_DIR")
+        or str(Path.cwd().parent / "models")
+    )
+    return str(Path(models_dir) / SPEACHES_CACHE_SUBDIR)
+
+
+def get_speaches_alias_host_file() -> str:
+    models_dir = (
+        os.environ.get("IGNITE_MODELS_DIR")
+        or os.environ.get("SWAPDECK_MODELS_DIR")
+        or str(Path.cwd().parent / "models")
+    )
+    return str(Path(models_dir) / SPEACHES_AUDIO_SUBDIR / SPEACHES_ALIAS_FILENAME)
+
+
+def get_speaches_alias_runtime_file() -> Path:
+    docker_path = Path("/models") / SPEACHES_AUDIO_SUBDIR / SPEACHES_ALIAS_FILENAME
+    if IS_DOCKER:
+        return docker_path
+    return Path(get_speaches_alias_host_file())
+
+
+def ensure_speaches_alias_file() -> None:
+    candidate_files = [get_speaches_alias_runtime_file(), Path(get_speaches_alias_host_file())]
+    for candidate in candidate_files:
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            if candidate.is_dir():
+                raise RuntimeError(f"{candidate} is a directory")
+            if not candidate.exists():
+                candidate.write_text("{}\n", encoding="utf-8")
+            return
+        except Exception:
+            continue
+
+
+def ensure_speaches_cache_dir() -> None:
+    # In Docker, /models is the bind mount target. The source path is still
+    # needed for Docker API container creation below.
+    candidate_dirs = [Path("/models") / SPEACHES_CACHE_SUBDIR, Path(get_speaches_cache_host_dir())]
+    for candidate in candidate_dirs:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return
+        except Exception:
+            continue
+
+
+def get_speaches_cache_volumes() -> Dict[str, Dict[str, str]]:
+    ensure_speaches_cache_dir()
+    ensure_speaches_alias_file()
+    return {
+        get_speaches_cache_host_dir(): {
+            "bind": SPEACHES_CACHE_CONTAINER_DIR,
+            "mode": "rw",
+        },
+        get_speaches_alias_host_file(): {
+            "bind": SPEACHES_ALIAS_CONTAINER_FILE,
+            "mode": "rw",
+        },
+    }
+
+
+def read_speech_aliases() -> Dict[str, str]:
+    ensure_speaches_alias_file()
+    alias_file = get_speaches_alias_runtime_file()
+    try:
+        raw = alias_file.read_text(encoding="utf-8").strip()
+        data = json.loads(raw or "{}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read speech aliases: {exc}")
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="Speech alias file must contain a JSON object.")
+
+    aliases: Dict[str, str] = {}
+    for key, value in data.items():
+        alias = str(key).strip()
+        target = str(value).strip()
+        if alias and target:
+            aliases[alias] = target
+    return aliases
+
+
+def write_speech_aliases(aliases: Dict[str, str]) -> Dict[str, Any]:
+    normalized: Dict[str, str] = {}
+    for key, value in (aliases or {}).items():
+        alias = str(key).strip()
+        target = str(value).strip()
+        if not alias and not target:
+            continue
+        if not alias or not target:
+            raise HTTPException(status_code=400, detail="Speech aliases require both alias and target model.")
+        normalized[alias] = target
+
+    ensure_speaches_alias_file()
+    alias_file = get_speaches_alias_runtime_file()
+    try:
+        alias_file.write_text(json.dumps(normalized, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to write speech aliases: {exc}")
+
+    accel = str(settings.get("speaches_accel") or os.environ.get("SPEACHES_ACCEL") or "cpu").strip().lower()
+    if accel not in {"cpu", "cuda"}:
+        accel = "cpu"
+    if is_docker_managed_runtime():
+        recreate_speaches_container(accel)
+
+    return {
+        "aliases": normalized,
+        "file": str(alias_file),
+        "restarted": is_docker_managed_runtime(),
+    }
+
+
 def recreate_speaches_container(accel: str) -> Dict[str, Any]:
     if accel not in {"cpu", "cuda"}:
         raise HTTPException(status_code=400, detail="Speech acceleration must be 'cpu' or 'cuda'.")
@@ -488,25 +622,13 @@ def recreate_speaches_container(accel: str) -> Dict[str, Any]:
 
     network_names: List[str] = []
     ports: Dict[str, Any] = {"8000/tcp": int(os.environ.get("SPEACHES_PORT", str(DOCKER_SPEACHES_PORT)))}
-    volumes: Dict[str, Dict[str, str]] = {"speaches-hf-cache": {"bind": "/home/ubuntu/.cache/huggingface/hub", "mode": "rw"}}
+    volumes = get_speaches_cache_volumes()
     restart_policy = {"Name": "no"}
 
     if existing is not None:
         attrs = existing.attrs
         network_names = list((attrs.get("NetworkSettings", {}) or {}).get("Networks", {}).keys())
         restart_policy = (attrs.get("HostConfig", {}) or {}).get("RestartPolicy") or {"Name": "no"}
-
-        mount_defs = {}
-        for mount in attrs.get("Mounts", []) or []:
-            mount_type = mount.get("Type")
-            destination = mount.get("Destination")
-            mode = mount.get("Mode") or "rw"
-            if mount_type == "volume":
-                mount_defs[mount.get("Name")] = {"bind": destination, "mode": mode}
-            elif mount_type == "bind":
-                mount_defs[mount.get("Source")] = {"bind": destination, "mode": mode}
-        if mount_defs:
-            volumes = mount_defs
 
         port_bindings = (attrs.get("HostConfig", {}) or {}).get("PortBindings") or {}
         if port_bindings:
@@ -537,13 +659,9 @@ def recreate_speaches_container(accel: str) -> Dict[str, Any]:
             network_names = []
 
     environment = {}
-    device_requests = None
+    gpu_kwargs: Dict[str, Any] = {}
     if accel == "cuda":
-        environment = {
-            "NVIDIA_VISIBLE_DEVICES": "all",
-            "NVIDIA_DRIVER_CAPABILITIES": "compute,utility",
-        }
-        device_requests = [docker.types.DeviceRequest(count=-1, capabilities=[["gpu"]])]
+        environment, gpu_kwargs = get_docker_gpu_container_options(client)
 
     primary_network = network_names[0] if network_names else None
 
@@ -557,7 +675,7 @@ def recreate_speaches_container(accel: str) -> Dict[str, Any]:
             environment=environment,
             restart_policy=restart_policy,
             network=primary_network,
-            device_requests=device_requests,
+            **gpu_kwargs,
         )
         for extra_network in network_names[1:]:
             try:
@@ -574,10 +692,13 @@ def recreate_speaches_container(accel: str) -> Dict[str, Any]:
     }
 
 
-def rebuild_runtime_container(llama_cpp_image: str) -> Dict[str, Any]:
+def rebuild_runtime_container(llama_cpp_image: str, llama_swap_version: Optional[str] = None) -> Dict[str, Any]:
     image_ref = str(llama_cpp_image or "").strip()
     if not image_ref:
         raise HTTPException(status_code=400, detail="llama.cpp image is required.")
+    swap_version = normalize_llama_swap_version(
+        llama_swap_version if llama_swap_version is not None else settings.get("llama_swap_version", "211")
+    )
 
     client = get_docker_client()
     if client is None:
@@ -592,8 +713,9 @@ def rebuild_runtime_container(llama_cpp_image: str) -> Dict[str, Any]:
             dockerfile="docker/llama-runtime/Dockerfile",
             tag=image_tag,
             rm=True,
+            pull=True,
             decode=True,
-            buildargs={"LLAMA_CPP_IMAGE": image_ref},
+            buildargs={"LLAMA_CPP_IMAGE": image_ref, "LLAMA_SWAP_VERSION": swap_version},
         )
         build_errors: List[str] = []
         for chunk in build_stream:
@@ -682,6 +804,9 @@ def rebuild_runtime_container(llama_cpp_image: str) -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to remove existing runtime container: {exc}")
 
+    gpu_environment, gpu_kwargs = get_docker_gpu_container_options(client)
+    environment.update(gpu_environment)
+
     try:
         container = client.containers.run(
             image_tag,
@@ -696,7 +821,7 @@ def rebuild_runtime_container(llama_cpp_image: str) -> Dict[str, Any]:
             command=command,
             entrypoint=entrypoint,
             working_dir=working_dir,
-            device_requests=[docker.types.DeviceRequest(count=-1, capabilities=[["gpu"]])],
+            **gpu_kwargs,
         )
         for extra_network in network_names[1:]:
             try:
@@ -710,8 +835,195 @@ def rebuild_runtime_container(llama_cpp_image: str) -> Dict[str, Any]:
         "ok": True,
         "image": image_tag,
         "llama_cpp_image": image_ref,
+        "llama_swap_version": swap_version,
         "container": DOCKER_RUNTIME_CONTAINER,
     }
+
+
+def clear_update_caches() -> None:
+    runtime_versions_cache.update({"checked_at": None, "result": None})
+    updates_cache.update({"checked_at": None, "result": None})
+
+
+def recreate_container_with_image(container_name: str, image: str) -> Dict[str, Any]:
+    image_ref = str(image or "").strip()
+    if not image_ref:
+        raise HTTPException(status_code=400, detail="Image is required.")
+
+    client = get_docker_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Docker runtime control is not available.")
+
+    try:
+        client.images.pull(image_ref)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to pull image {image_ref}: {exc}")
+
+    try:
+        existing = client.containers.get(container_name)
+    except Exception:
+        existing = None
+
+    if existing is None:
+        raise HTTPException(status_code=503, detail=f"Container '{container_name}' was not found.")
+
+    attrs = existing.attrs
+    config = (attrs.get("Config") or {})
+    host_config = (attrs.get("HostConfig") or {})
+    network_names = list(((attrs.get("NetworkSettings") or {}).get("Networks") or {}).keys())
+    restart_policy = host_config.get("RestartPolicy") or {"Name": "no"}
+    labels = dict(config.get("Labels") or {})
+    command = config.get("Cmd")
+    entrypoint = config.get("Entrypoint")
+    working_dir = config.get("WorkingDir") or None
+    environment: Dict[str, str] = {}
+
+    for entry in config.get("Env") or []:
+        if "=" in entry:
+            key, value = entry.split("=", 1)
+            environment[key] = value
+
+    volumes: Dict[str, Dict[str, str]] = {}
+    for mount in attrs.get("Mounts", []) or []:
+        mount_type = mount.get("Type")
+        destination = mount.get("Destination")
+        mode = mount.get("Mode") or "rw"
+        if mount_type == "volume":
+            volumes[mount.get("Name")] = {"bind": destination, "mode": mode}
+        elif mount_type == "bind":
+            volumes[mount.get("Source")] = {"bind": destination, "mode": mode}
+
+    ports: Dict[str, Any] = {}
+    for container_port, bindings in (host_config.get("PortBindings") or {}).items():
+        if not bindings:
+            continue
+        binding = bindings[0]
+        host_ip = binding.get("HostIp") or "0.0.0.0"
+        host_port = int(binding.get("HostPort") or 0)
+        if host_port:
+            ports[container_port] = host_port if host_ip in {"0.0.0.0", ""} else (host_ip, host_port)
+
+    try:
+        existing.stop(timeout=20)
+    except Exception:
+        pass
+    try:
+        existing.remove()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to remove existing container '{container_name}': {exc}")
+
+    try:
+        container = client.containers.run(
+            image_ref,
+            name=container_name,
+            detach=True,
+            ports=ports or None,
+            volumes=volumes or None,
+            environment=environment or None,
+            labels=labels or None,
+            restart_policy=restart_policy,
+            network=(network_names[0] if network_names else None),
+            command=command,
+            entrypoint=entrypoint,
+            working_dir=working_dir,
+        )
+        for extra_network in network_names[1:]:
+            try:
+                client.networks.get(extra_network).connect(container)
+            except Exception:
+                pass
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to start updated container '{container_name}': {exc}")
+
+    return {"ok": True, "container": container_name, "image": image_ref}
+
+
+def run_update_action(action: str) -> Dict[str, Any]:
+    normalized = str(action or "").strip().lower()
+    if not is_docker_managed_runtime():
+        raise HTTPException(status_code=400, detail="Update buttons are only available for Docker-managed Ignite.")
+
+    started_at = datetime.now()
+    if normalized == "runtime":
+        image_ref = str(settings.get("llama_cpp_image") or parse_current_runtime_refs()["llama_cpp_image"]).strip()
+        swap_version = normalize_llama_swap_version(settings.get("llama_swap_version", "211"))
+        result = rebuild_runtime_container(image_ref, swap_version)
+        clear_update_caches()
+        versions = get_runtime_binary_versions(refresh=True)
+        return {
+            "ok": True,
+            "action": normalized,
+            "title": "Runtime updated",
+            "message": f"Runtime rebuilt from {image_ref}.",
+            "started_at": started_at.isoformat(),
+            "finished_at": datetime.now().isoformat(),
+            "result": result,
+            "versions": versions,
+        }
+
+    if normalized == "llama-swap":
+        release = fetch_github_json("https://api.github.com/repos/mostlygeek/llama-swap/releases/latest")
+        latest_tag = str((release or {}).get("tag_name") or "").strip()
+        if not latest_tag:
+            raise HTTPException(status_code=502, detail="Could not read latest llama-swap release from GitHub.")
+        swap_version = normalize_llama_swap_version(latest_tag)
+        image_ref = str(settings.get("llama_cpp_image") or parse_current_runtime_refs()["llama_cpp_image"]).strip()
+        settings["llama_swap_version"] = swap_version
+        save_settings(settings)
+        result = rebuild_runtime_container(image_ref, swap_version)
+        clear_update_caches()
+        versions = get_runtime_binary_versions(refresh=True)
+        return {
+            "ok": True,
+            "action": normalized,
+            "title": "llama-swap updated",
+            "message": f"llama-swap updated to v{swap_version} and runtime was rebuilt.",
+            "started_at": started_at.isoformat(),
+            "finished_at": datetime.now().isoformat(),
+            "result": result,
+            "versions": versions,
+        }
+
+    if normalized == "speech":
+        accel = str(settings.get("speaches_accel") or os.environ.get("SPEACHES_ACCEL") or "cpu").strip().lower()
+        if accel not in {"cpu", "cuda"}:
+            accel = "cpu"
+        result = recreate_speaches_container(accel)
+        clear_update_caches()
+        return {
+            "ok": True,
+            "action": normalized,
+            "title": "Speech updated",
+            "message": f"Speaches refreshed with the latest {accel} image.",
+            "started_at": started_at.isoformat(),
+            "finished_at": datetime.now().isoformat(),
+            "result": result,
+        }
+
+    if normalized == "llmfit":
+        refs = parse_current_runtime_refs()
+        result = recreate_container_with_image(DOCKER_LLMFIT_CONTAINER, refs["llmfit_image"])
+        clear_update_caches()
+        return {
+            "ok": True,
+            "action": normalized,
+            "title": "llmfit updated",
+            "message": f"llmfit refreshed from {refs['llmfit_image']}.",
+            "started_at": started_at.isoformat(),
+            "finished_at": datetime.now().isoformat(),
+            "result": result,
+        }
+
+    if normalized == "ignite":
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "Ignite app self-update needs a host checkout action. Runtime, speech, and llmfit can be updated "
+                "from the UI now; app self-update will be added separately so it can safely run git pull on the host."
+            ),
+        )
+
+    raise HTTPException(status_code=404, detail=f"Unknown update action: {action}")
 
 
 def load_settings() -> Dict[str, Any]:
@@ -837,7 +1149,7 @@ def parse_current_runtime_refs() -> Dict[str, Any]:
 
     return {
         "ignite_version": env_ignite_version or ignite_version or "unknown",
-        "llama_cpp_image": configured_llama_cpp_image or env_llama_cpp_image or llama_cpp_image or "ghcr.io/ggml-org/llama.cpp:server-cuda",
+        "llama_cpp_image": configured_llama_cpp_image or env_llama_cpp_image or llama_cpp_image or "spadav/llama-cpp-server:latest",
         "llmfit_image": env_llmfit_image or llmfit_image or "ghcr.io/alexsjones/llmfit:latest",
     }
 
@@ -1035,6 +1347,9 @@ def get_updates_payload(refresh: bool = False) -> Dict[str, Any]:
             "latest": None,
             "status": "local_app",
             "summary": "Ignite is your app layer. Update it by pulling the repo and rebuilding the stack.",
+            "update_action": "ignite",
+            "update_available_in_ui": False,
+            "update_disabled_reason": "App self-update needs a host checkout action and is not automated yet.",
             "changelog_url": "https://github.com/Spadav/Ignite/commits/main",
             "release_url": "https://github.com/Spadav/Ignite",
             "update_path_label": "Refresh Installed Runtime",
@@ -1054,6 +1369,8 @@ def get_updates_payload(refresh: bool = False) -> Dict[str, Any]:
             "latest": llama_swap_release.get("tag_name") if llama_swap_release else None,
             "status": llama_swap_status,
             "summary": "Pinned release inside the runtime image. This can be compared directly to the latest upstream release.",
+            "update_action": "llama-swap",
+            "update_available_in_ui": True,
             "changelog_url": (llama_swap_release or {}).get("html_url") or "https://github.com/mostlygeek/llama-swap/releases",
             "release_url": "https://github.com/mostlygeek/llama-swap/releases",
             "update_path_label": "Refresh Installed Runtime",
@@ -1073,6 +1390,8 @@ def get_updates_payload(refresh: bool = False) -> Dict[str, Any]:
             "latest": latest_llama_cpp_label,
             "status": llama_cpp_status,
             "summary": "Reported directly by the running runtime container. `./scripts/update.sh` refreshes the published runtime image. Upstream master may still move ahead between image publishes.",
+            "update_action": "runtime",
+            "update_available_in_ui": True,
             "changelog_url": "https://github.com/ggml-org/llama.cpp/commits/master",
             "release_url": "https://github.com/ggml-org/llama.cpp",
             "update_path_label": "Refresh Runtime Image",
@@ -1084,12 +1403,33 @@ def get_updates_payload(refresh: bool = False) -> Dict[str, Any]:
             ],
         },
         {
+            "id": "speaches",
+            "name": "Speaches",
+            "current": f"ghcr.io/speaches-ai/speaches:latest-{str(settings.get('speaches_accel') or 'cpu').strip().lower()}",
+            "latest": None,
+            "status": "floating_image",
+            "summary": "Speech service for STT/TTS. This uses the selected CPU/CUDA floating image and updates when pulled again.",
+            "update_action": "speech",
+            "update_available_in_ui": True,
+            "changelog_url": "https://github.com/speaches-ai/speaches/commits/master",
+            "release_url": "https://github.com/speaches-ai/speaches",
+            "update_path_label": "Refresh Speech Image",
+            "update_script": "./scripts/update.sh",
+            "version_upgrade_label": "",
+            "manual_update": [
+                "docker compose pull speaches",
+                "docker compose up -d speaches",
+            ],
+        },
+        {
             "id": "llmfit",
             "name": "llmfit",
             "current": refs["llmfit_image"],
             "latest": (llmfit_repo or {}).get("pushed_at"),
             "status": "floating_image",
             "summary": "This uses the floating `latest` image tag. Pull again to refresh to the newest published image.",
+            "update_action": "llmfit",
+            "update_available_in_ui": True,
             "changelog_url": "https://github.com/alexsjones/llmfit/commits/main",
             "release_url": "https://github.com/alexsjones/llmfit",
             "update_path_label": "Refresh Runtime Image",
@@ -1237,15 +1577,48 @@ def get_docker_gpu_preflight() -> Dict[str, Any]:
     has_cdi_dirs = "/etc/cdi" in info_text or "/var/run/cdi" in info_text
     has_nvidia_ctk = bool(shutil.which("nvidia-ctk"))
 
+    if has_nvidia_runtime:
+        test_command = [
+            "docker",
+            "run",
+            "--rm",
+            "--runtime=nvidia",
+            "-e",
+            "NVIDIA_VISIBLE_DEVICES=all",
+            "-e",
+            "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+            "--entrypoint",
+            "sh",
+            "spadav/llama-cpp-server:latest",
+            "-lc",
+            "nvidia-smi -L",
+        ]
+        preferred_mode = "nvidia-runtime"
+    else:
+        test_command = [
+            "docker",
+            "run",
+            "--rm",
+            "--gpus",
+            "all",
+            "--entrypoint",
+            "sh",
+            "spadav/llama-cpp-server:latest",
+            "-lc",
+            "nvidia-smi -L",
+        ]
+        preferred_mode = "cdi"
+
     try:
         test = run_command(
-            ["docker", "run", "--rm", "--gpus", "all", "--entrypoint", "sh", "ghcr.io/ggml-org/llama.cpp:server-cuda", "-lc", "nvidia-smi -L"],
+            test_command,
             timeout=20.0,
         )
         if test.returncode == 0 and "GPU " in (test.stdout or ""):
             preflight["gpu_ready"] = True
             preflight["state"] = "ready"
             preflight["message"] = "Docker GPU runtime is ready."
+            preflight["preferred_mode"] = preferred_mode
             docker_gpu_preflight_cache.update({"checked_at": datetime.now(), "result": preflight})
             return preflight
 
@@ -1256,7 +1629,7 @@ def get_docker_gpu_preflight() -> Dict[str, Any]:
     preflight["state"] = "docker_gpu_not_ready"
     preflight["message"] = "Docker is installed, but GPU passthrough is not configured."
     preflight["details"] = [
-        "Host `nvidia-smi` works, but `docker run --gpus all ...` does not.",
+        f"Host `nvidia-smi` works, but Docker GPU startup failed in {preferred_mode} mode.",
         f"NVIDIA Container Toolkit installed: {'yes' if has_nvidia_ctk else 'no'}",
         f"Docker NVIDIA runtime registered: {'yes' if has_nvidia_runtime else 'no'}",
         f"Docker CDI directories visible: {'yes' if has_cdi_dirs else 'no'}",
@@ -1268,6 +1641,24 @@ def get_docker_gpu_preflight() -> Dict[str, Any]:
     )
     docker_gpu_preflight_cache.update({"checked_at": datetime.now(), "result": preflight})
     return preflight
+
+
+def get_docker_gpu_container_options(client, visible_devices: str = "all") -> tuple[Dict[str, str], Dict[str, Any]]:
+    environment = {
+        "NVIDIA_VISIBLE_DEVICES": str(visible_devices or "all"),
+        "NVIDIA_DRIVER_CAPABILITIES": "compute,utility",
+    }
+    try:
+        runtimes = (client.info() or {}).get("Runtimes") or {}
+    except Exception:
+        runtimes = {}
+
+    if "nvidia" in runtimes:
+        return environment, {"runtime": "nvidia"}
+
+    return environment, {
+        "device_requests": [docker.types.DeviceRequest(count=-1, capabilities=[["gpu"]])]
+    }
 
 
 def is_llama_swap_running() -> bool:
@@ -2041,6 +2432,10 @@ class SpeechSynthesisRequest(BaseModel):
     voice: Optional[str] = None
 
 
+class SpeechAliasesRequest(BaseModel):
+    aliases: Dict[str, str] = Field(default_factory=dict)
+
+
 def sanitize_model_id(value: str) -> str:
     sanitized = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-")
     return sanitized or f"Model-{int(datetime.now().timestamp())}"
@@ -2408,6 +2803,12 @@ def api_get_updates(refresh: bool = Query(False)):
     return get_updates_payload(refresh=refresh)
 
 
+@app.post("/api/updates/actions/{action}")
+def api_run_update_action(action: str):
+    """Run a managed update action for one Docker-backed Ignite service."""
+    return run_update_action(action)
+
+
 @app.get("/api/runtime/models")
 def api_runtime_models():
     """Get current model states from llama-swap."""
@@ -2430,6 +2831,22 @@ def api_speech_models():
 def api_speech_voices(model: str = Query("")):
     """List available voices from the speech service."""
     return get_speech_voices(model=model)
+
+
+@app.get("/api/speech/aliases")
+def api_speech_aliases():
+    """Read OpenAI-compatible speech aliases from the shared audio folder."""
+    return {
+        "aliases": read_speech_aliases(),
+        "file": str(get_speaches_alias_runtime_file()),
+        "container_file": SPEACHES_ALIAS_CONTAINER_FILE,
+    }
+
+
+@app.put("/api/speech/aliases")
+def api_save_speech_aliases(request: SpeechAliasesRequest):
+    """Save speech aliases and restart Speaches so its alias cache reloads."""
+    return write_speech_aliases(request.aliases)
 
 
 @app.post("/api/speech/models/install/{model_id:path}")
@@ -2812,8 +3229,10 @@ def api_save_settings(new_settings: Dict[str, Any]):
         if not requested_llama_cpp_image:
             raise HTTPException(status_code=400, detail="llama.cpp image is required.")
         settings["llama_cpp_image"] = requested_llama_cpp_image
+    if is_docker_managed_runtime() and "llama_swap_version" in new_settings:
+        settings["llama_swap_version"] = normalize_llama_swap_version(str(new_settings["llama_swap_version"] or ""))
     if requested_llama_cpp_image is not None:
-        rebuild_runtime_container(requested_llama_cpp_image)
+        rebuild_runtime_container(requested_llama_cpp_image, settings.get("llama_swap_version", "211"))
     save_settings(settings)
     if requested_speaches_accel is not None:
         recreate_speaches_container(requested_speaches_accel)

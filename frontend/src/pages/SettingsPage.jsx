@@ -1,5 +1,20 @@
 import React, { useEffect, useState } from 'react'
 
+const RUNTIME_IMAGE_OPTIONS = [
+  {
+    label: 'Mainline llama.cpp',
+    description: 'Recommended default for most users.',
+    dockerHub: 'spadav/llama-cpp-server:latest',
+    ghcr: 'ghcr.io/spadav/llama-cpp-server:latest',
+  },
+  {
+    label: 'ik_llama.cpp',
+    description: 'Alternative runtime for users who specifically want ikawrakow/ik_llama.cpp.',
+    dockerHub: 'spadav/ik-llama-cpp-server:latest',
+    ghcr: 'ghcr.io/spadav/ik-llama-cpp-server:latest',
+  },
+]
+
 function Section({ title, description, children }) {
   return (
     <details className="card mb-6">
@@ -242,11 +257,45 @@ function SettingsPage() {
             <div className="rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}>
               <div className="text-sm font-medium">Current configured base image</div>
               <div className="mt-2 text-sm font-mono break-all" style={{ color: 'var(--text-muted)' }}>
-                {runtimeRefs?.llama_cpp_image || settings.llama_cpp_image || 'ghcr.io/ggml-org/llama.cpp:server-cuda'}
+                {runtimeRefs?.llama_cpp_image || settings.llama_cpp_image || 'spadav/llama-cpp-server:latest'}
               </div>
               <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
-                Use the upstream image by default, or point Ignite at your own prebuilt runtime image.
+                Ignite wraps this image with llama-swap. Use the recommended mainline image unless you intentionally want ik_llama.cpp or a custom build.
               </p>
+            </div>
+
+            <div className="rounded-lg border p-4" style={{ borderColor: 'var(--line-soft)' }}>
+              <div className="text-sm font-semibold mb-3">Recommended Runtime Images</div>
+              <div className="space-y-3">
+                {RUNTIME_IMAGE_OPTIONS.map((option) => (
+                  <div key={option.label} className="rounded-lg border p-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.05)' }}>
+                    <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium">{option.label}</div>
+                        <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>{option.description}</div>
+                        <div className="font-mono text-xs mt-2 break-all">Docker Hub: {option.dockerHub}</div>
+                        <div className="font-mono text-xs mt-1 break-all">GHCR: {option.ghcr}</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleChange('llama_cpp_image', option.dockerHub)}
+                          className="btn btn-secondary text-xs"
+                        >
+                          Use Docker Hub
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleChange('llama_cpp_image', option.ghcr)}
+                          className="btn btn-secondary text-xs"
+                        >
+                          Use GHCR
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div>
@@ -256,10 +305,24 @@ function SettingsPage() {
                 value={settings.llama_cpp_image || ''}
                 onChange={(e) => handleChange('llama_cpp_image', e.target.value)}
                 className={inputClass}
-                placeholder="ghcr.io/ggml-org/llama.cpp:server-cuda"
+                placeholder="spadav/llama-cpp-server:latest"
               />
               <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
-                Example: `spadav/ik-llama:latest` (ik_llama.cpp) or `ghcr.io/yourname/llama.cpp:server-cuda-custom`. Saving persists this in Ignite settings and rebuilds `llama-runtime`. The startup scripts reuse the same saved value automatically.
+                Saving persists this in Ignite settings and rebuilds `llama-runtime`. The startup scripts reuse the same saved value automatically.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">llama-swap Version</label>
+              <input
+                type="text"
+                value={settings.llama_swap_version || ''}
+                onChange={(e) => handleChange('llama_swap_version', e.target.value)}
+                className={inputClass}
+                placeholder="211"
+              />
+              <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+                Usually managed from the Updates page. Saving here persists the pinned llama-swap release and rebuilds `llama-runtime` when the runtime image also changes.
               </p>
             </div>
           </div>
@@ -341,7 +404,8 @@ function SettingsPage() {
 IGNITE_CONFIG_DIR=/home/your-user/ignite-config
 IGNITE_PORT=3000
 LLAMA_SWAP_PORT=8090
-LLAMA_CPP_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
+LLAMA_CPP_IMAGE=spadav/llama-cpp-server:latest
+LLAMA_SWAP_VERSION=211
 SPEACHES_ACCEL=cuda`}
               </div>
             </div>

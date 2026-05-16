@@ -5,7 +5,6 @@ services:
       dockerfile: Dockerfile
     container_name: ignite
     restart: "${IGNITE_RESTART_POLICY:-no}"
-    gpus: all
     ports:
       - "${IGNITE_PORT:-3000}:3000"
     environment:
@@ -19,12 +18,10 @@ services:
       LLAMA_SWAP_PORT: "${LLAMA_SWAP_PORT:-8090}"
       SPEACHES_PORT: "${SPEACHES_PORT:-8000}"
       IGNITE_APP_VERSION: "1.0.0"
-      LLAMA_CPP_IMAGE_REF: "${LLAMA_CPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}"
-      LLAMA_SWAP_VERSION_REF: "211"
+      LLAMA_CPP_IMAGE_REF: "${LLAMA_CPP_IMAGE:-spadav/llama-cpp-server:latest}"
+      LLAMA_SWAP_VERSION_REF: "${LLAMA_SWAP_VERSION:-211}"
       LLMFIT_IMAGE_REF: "ghcr.io/alexsjones/llmfit:latest"
       SPEACHES_IMAGE_REF: "ghcr.io/speaches-ai/speaches:latest-cpu"
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:
       - ${IGNITE_MODELS_DIR:-${SWAPDECK_MODELS_DIR:-./models}}:/models
       - ${IGNITE_CONFIG_DIR:-${SWAPDECK_CONFIG_DIR:-./config}}:/config
@@ -33,48 +30,25 @@ services:
       - llama-runtime
       - llmfit
       - speaches
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
   llama-runtime:
     build:
       context: .
       dockerfile: docker/llama-runtime/Dockerfile
       args:
-        LLAMA_CPP_IMAGE: "${LLAMA_CPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}"
+        LLAMA_CPP_IMAGE: "${LLAMA_CPP_IMAGE:-spadav/llama-cpp-server:latest}"
+        LLAMA_SWAP_VERSION: "${LLAMA_SWAP_VERSION:-211}"
     container_name: llama-runtime
     restart: "${IGNITE_RESTART_POLICY:-no}"
-    gpus: all
     ports:
       - "${LLAMA_SWAP_PORT:-8090}:8090"
     volumes:
       - ${IGNITE_MODELS_DIR:-${SWAPDECK_MODELS_DIR:-./models}}:/models
       - ${IGNITE_CONFIG_DIR:-${SWAPDECK_CONFIG_DIR:-./config}}:/config
-    environment:
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
   llmfit:
     image: ghcr.io/alexsjones/llmfit:latest
     container_name: llmfit
     restart: "${IGNITE_RESTART_POLICY:-no}"
     command: ["serve", "--host", "0.0.0.0", "--port", "8787"]
-    gpus: all
-    environment:
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
 
   speaches:
     image: ghcr.io/speaches-ai/speaches:latest-cpu
@@ -83,7 +57,5 @@ services:
     ports:
       - "${SPEACHES_PORT:-8000}:8000"
     volumes:
-      - speaches-hf-cache:/home/ubuntu/.cache/huggingface/hub
-
-volumes:
-  speaches-hf-cache:
+      - ${IGNITE_MODELS_DIR:-${SWAPDECK_MODELS_DIR:-./models}}/audio/huggingface:/home/ubuntu/.cache/huggingface/hub
+      - ${IGNITE_MODELS_DIR:-${SWAPDECK_MODELS_DIR:-./models}}/audio/model_aliases.json:/home/ubuntu/speaches/model_aliases.json

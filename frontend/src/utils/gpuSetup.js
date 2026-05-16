@@ -68,6 +68,6 @@ export function getLinuxGpuSetupCommands() {
     'sudo apt-get install -y nvidia-container-toolkit',
     'sudo nvidia-ctk runtime configure --runtime=docker',
     'sudo systemctl restart docker',
-    'docker run --rm --gpus all --entrypoint sh ghcr.io/ggml-org/llama.cpp:server-cuda -lc \'nvidia-smi -L\'',
+    'docker run --rm --gpus all --entrypoint sh spadav/llama-cpp-server:latest -lc \'nvidia-smi -L\'',
   ]
 }

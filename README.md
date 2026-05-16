@@ -31,7 +31,7 @@ Ignite currently targets Linux with Docker and NVIDIA GPU passthrough.
 - NVIDIA Container Toolkit configured so this works:
 
 ```bash
-docker run --rm --gpus all --entrypoint sh ghcr.io/ggml-org/llama.cpp:server-cuda -lc 'nvidia-smi -L'
+docker run --rm --gpus all --entrypoint sh spadav/llama-cpp-server:latest -lc 'nvidia-smi -L'
 ```
 
 If that command fails, Ignite will not be able to run GPU-backed models.
@@ -96,7 +96,7 @@ You can also override the published ports, speech mode, and runtime base image t
 ```bash
 IGNITE_PORT=3000
 LLAMA_SWAP_PORT=8090
-LLAMA_CPP_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
+LLAMA_CPP_IMAGE=spadav/llama-cpp-server:latest
 SPEACHES_ACCEL=cpu
 ```
 
@@ -104,10 +104,12 @@ Speech mode options:
 - `SPEACHES_ACCEL=cpu`
 - `SPEACHES_ACCEL=cuda`
 
-If you want to point Ignite at your own prebuilt `llama.cpp` runtime image, set:
-
-- `LLAMA_CPP_IMAGE=spadav/ik-llama:latest` for the published `ik_llama.cpp` runtime image
-- or `LLAMA_CPP_IMAGE=ghcr.io/yourname/llama.cpp:server-cuda-custom` for your own custom build
+Runtime image options:
+- Mainline llama.cpp, Docker Hub: `LLAMA_CPP_IMAGE=spadav/llama-cpp-server:latest`
+- Mainline llama.cpp, GHCR: `LLAMA_CPP_IMAGE=ghcr.io/spadav/llama-cpp-server:latest`
+- ik_llama.cpp, Docker Hub: `LLAMA_CPP_IMAGE=spadav/ik-llama-cpp-server:latest`
+- ik_llama.cpp, GHCR: `LLAMA_CPP_IMAGE=ghcr.io/spadav/ik-llama-cpp-server:latest`
+- Custom image: `LLAMA_CPP_IMAGE=ghcr.io/yourname/llama.cpp:server-cuda-custom`
 
 After changing ports, speech mode, or `LLAMA_CPP_IMAGE`, restart Ignite.
 
@@ -158,6 +160,12 @@ Advanced users can still override it in `.env` if they want a different Docker r
 
 These are the default paths for normal users.
 
+Ignite keeps model assets together under the models folder:
+
+- `./models/*.gguf` for text and vision GGUF files
+- `./models/audio/huggingface` for downloaded Speaches STT/TTS models
+- `./config` for Ignite settings and `llama-swap` config
+
 Advanced users can override them:
 
 ```bash
@@ -171,20 +179,31 @@ IGNITE_MODELS_DIR=/path/to/models
 IGNITE_CONFIG_DIR=/path/to/config
 IGNITE_PORT=3000
 LLAMA_SWAP_PORT=8090
-LLAMA_CPP_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
+LLAMA_CPP_IMAGE=spadav/llama-cpp-server:latest
 SPEACHES_ACCEL=cpu
 IGNITE_RESTART_POLICY=no
 ```
 
 When you change speech mode or the `llama.cpp` base image from the Ignite Settings page, Ignite saves that choice in `ignite-settings.json` inside your config folder. The host scripts reuse that saved value automatically on the next `start.sh`, `rebuild.sh`, or `update.sh`.
 
-If you want to try `ik_llama.cpp` in Ignite without building it yourself first, use:
+Ignite defaults to the mainline llama.cpp image:
 
 ```bash
-LLAMA_CPP_IMAGE=spadav/ik-llama:latest
+LLAMA_CPP_IMAGE=spadav/llama-cpp-server:latest
 ```
 
-That image is intended as the `ik_llama.cpp` runtime option, while `ghcr.io/ggml-org/llama.cpp:server-cuda` remains the default mainline runtime.
+If you want to try `ik_llama.cpp` in Ignite, use:
+
+```bash
+LLAMA_CPP_IMAGE=spadav/ik-llama-cpp-server:latest
+```
+
+Both images are also available on GHCR:
+
+```bash
+LLAMA_CPP_IMAGE=ghcr.io/spadav/llama-cpp-server:latest
+LLAMA_CPP_IMAGE=ghcr.io/spadav/ik-llama-cpp-server:latest
+```
 
 ## First Run
 

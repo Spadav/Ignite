@@ -11,7 +11,7 @@ ensure_layout
 print_paths
 
 print_step "3/4" "Checking Docker GPU support"
-if docker run --rm --gpus all --entrypoint sh ghcr.io/ggml-org/llama.cpp:server-cuda -lc 'nvidia-smi -L' >/tmp/ignite-gpu-check.log 2>&1; then
+if docker run --rm --gpus all --entrypoint sh spadav/llama-cpp-server:latest -lc 'nvidia-smi -L' >/tmp/ignite-gpu-check.log 2>&1; then
   printf 'GPU passthrough is ready.\n'
 else
   cat /tmp/ignite-gpu-check.log >&2 || true
