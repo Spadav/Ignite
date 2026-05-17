@@ -7,6 +7,17 @@ const PLAYGROUND_TABS = [
   { key: 'speech', label: 'Speech' },
 ]
 
+const DEFAULT_GENERATION_SETTINGS = {
+  maxTokens: '512',
+  temperature: '',
+  topP: '',
+  topK: '',
+  minP: '',
+  repeatPenalty: '',
+  seed: '',
+  stop: '',
+}
+
 function splitThinkingBlocks(text) {
   if (!text) return { answer: '', thinkingBlocks: [] }
 
@@ -39,6 +50,7 @@ function TestPage() {
   const [duration, setDuration] = useState(0)
   const [error, setError] = useState('')
   const [meta, setMeta] = useState(null)
+  const [generationSettings, setGenerationSettings] = useState(DEFAULT_GENERATION_SETTINGS)
 
   const [speechModels, setSpeechModels] = useState([])
   const [speechError, setSpeechError] = useState('')
@@ -68,6 +80,7 @@ function TestPage() {
       setDuration(saved.duration || 0)
       setError(saved.error || '')
       setMeta(saved.meta || null)
+      setGenerationSettings({ ...DEFAULT_GENERATION_SETTINGS, ...(saved.generationSettings || {}) })
       setTtsInput(saved.ttsInput || '')
       setTtsModel(saved.ttsModel || '')
       setTtsVoice(saved.ttsVoice || '')
@@ -130,6 +143,7 @@ function TestPage() {
       duration,
       error,
       meta,
+      generationSettings,
       ttsInput,
       ttsModel,
       ttsVoice,
@@ -137,7 +151,7 @@ function TestPage() {
       sttResult,
     }
     sessionStorage.setItem(TEST_STATE_KEY, JSON.stringify(payload))
-  }, [activeTab, prompt, model, response, reasoning, tokens, duration, error, meta, ttsInput, ttsModel, ttsVoice, sttModel, sttResult])
+  }, [activeTab, prompt, model, response, reasoning, tokens, duration, error, meta, generationSettings, ttsInput, ttsModel, ttsVoice, sttModel, sttResult])
 
   useEffect(() => {
     const loadVoices = async () => {
@@ -162,8 +176,42 @@ function TestPage() {
     loadVoices()
   }, [ttsModel, ttsVoice])
 
+  const updateGenerationSetting = (key, value) => {
+    setGenerationSettings((previous) => ({ ...previous, [key]: value }))
+  }
+
+  const buildGenerationPayload = () => {
+    const payload = {}
+    const maxTokens = Number.parseInt(generationSettings.maxTokens, 10)
+    if (Number.isFinite(maxTokens) && maxTokens > 0) payload.max_tokens = maxTokens
+
+    const numericFields = [
+      ['temperature', 'temperature', Number.parseFloat],
+      ['topP', 'top_p', Number.parseFloat],
+      ['topK', 'top_k', Number.parseInt],
+      ['minP', 'min_p', Number.parseFloat],
+      ['repeatPenalty', 'repeat_penalty', Number.parseFloat],
+      ['seed', 'seed', Number.parseInt],
+    ]
+
+    numericFields.forEach(([stateKey, payloadKey, parser]) => {
+      const raw = String(generationSettings[stateKey] || '').trim()
+      if (!raw) return
+      const value = parser(raw, 10)
+      if (Number.isFinite(value)) payload[payloadKey] = value
+    })
+
+    const stop = String(generationSettings.stop || '')
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+    if (stop.length > 0) payload.stop = stop
+
+    return payload
+  }
+
   const handleSubmit = async () => {
-    if (!prompt.trim() || !model) return
+    if ((!prompt.trim() && !imageDataUrl) || !model) return
 
     try {
       setLoading(true)
@@ -175,7 +223,12 @@ function TestPage() {
       const res = await fetch('/api/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, model, image_data_url: imageDataUrl })
+        body: JSON.stringify({
+          prompt,
+          model,
+          image_data_url: imageDataUrl,
+          ...buildGenerationPayload()
+        })
       })
 
       if (!res.ok) {
@@ -195,6 +248,7 @@ function TestPage() {
         system_fingerprint: data.system_fingerprint,
         created: data.created,
         request_mode: data.request_mode,
+        request_settings: data.request_settings || {},
         usage: data.usage || {},
         timings: data.timings || {}
       })
@@ -388,6 +442,115 @@ function TestPage() {
               />
             </div>
 
+            <details className="mt-4 rounded-lg border p-3" style={{ borderColor: 'var(--line-soft)' }}>
+              <summary className="cursor-pointer text-sm font-medium">Advanced generation settings</summary>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Max tokens</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={generationSettings.maxTokens}
+                    onChange={(event) => updateGenerationSetting('maxTokens', event.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border dark:border-gray-600 dark:bg-gray-700"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Temperature</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    value={generationSettings.temperature}
+                    onChange={(event) => updateGenerationSetting('temperature', event.target.value)}
+                    placeholder="runtime default"
+                    className="w-full px-3 py-2 rounded-lg border dark:border-gray-600 dark:bg-gray-700"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Top P</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="1"
+                    value={generationSettings.topP}
+                    onChange={(event) => updateGenerationSetting('topP', event.target.value)}
+                    placeholder="runtime default"
+                    className="w-full px-3 py-2 rounded-lg border dark:border-gray-600 dark:bg-gray-700"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Top K</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={generationSettings.topK}
+                    onChange={(event) => updateGenerationSetting('topK', event.target.value)}
+                    placeholder="runtime default"
+                    className="w-full px-3 py-2 rounded-lg border dark:border-gray-600 dark:bg-gray-700"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Min P</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="1"
+                    value={generationSettings.minP}
+                    onChange={(event) => updateGenerationSetting('minP', event.target.value)}
+                    placeholder="runtime default"
+                    className="w-full px-3 py-2 rounded-lg border dark:border-gray-600 dark:bg-gray-700"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Repeat penalty</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={generationSettings.repeatPenalty}
+                    onChange={(event) => updateGenerationSetting('repeatPenalty', event.target.value)}
+                    placeholder="runtime default"
+                    className="w-full px-3 py-2 rounded-lg border dark:border-gray-600 dark:bg-gray-700"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Seed</label>
+                  <input
+                    type="number"
+                    value={generationSettings.seed}
+                    onChange={(event) => updateGenerationSetting('seed', event.target.value)}
+                    placeholder="random"
+                    className="w-full px-3 py-2 rounded-lg border dark:border-gray-600 dark:bg-gray-700"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium mb-1">Stop strings</label>
+                  <textarea
+                    value={generationSettings.stop}
+                    onChange={(event) => updateGenerationSetting('stop', event.target.value)}
+                    rows={2}
+                    placeholder="One stop string per line"
+                    className="w-full px-3 py-2 rounded-lg border dark:border-gray-600 dark:bg-gray-700 resize-none"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-3 mt-3 flex-wrap">
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Empty fields are omitted so llama.cpp uses its runtime default. Max tokens defaults to 512.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setGenerationSettings(DEFAULT_GENERATION_SETTINGS)}
+                  className="btn btn-secondary text-sm"
+                >
+                  Reset Defaults
+                </button>
+              </div>
+            </details>
+
             <button onClick={handleSubmit} disabled={loading || (!prompt.trim() && !hasImage) || !model} className="btn btn-primary mt-4">
               {loading ? 'Generating...' : 'Send Prompt'}
             </button>
@@ -444,6 +607,9 @@ function TestPage() {
                     <div><span style={{ color: 'var(--text-muted)' }}>Predicted ms:</span> {meta.timings.predicted_ms ?? '-'}</div>
                     <div><span style={{ color: 'var(--text-muted)' }}>Tokens/sec:</span> {meta.timings.predicted_per_second ?? '-'}</div>
                     <div><span style={{ color: 'var(--text-muted)' }}>Request mode:</span> {meta.request_mode || selectedModelMode}</div>
+                    <div><span style={{ color: 'var(--text-muted)' }}>Max tokens:</span> {meta.request_settings?.max_tokens ?? '-'}</div>
+                    <div><span style={{ color: 'var(--text-muted)' }}>Temperature:</span> {meta.request_settings?.temperature ?? 'runtime default'}</div>
+                    <div><span style={{ color: 'var(--text-muted)' }}>Top P:</span> {meta.request_settings?.top_p ?? 'runtime default'}</div>
                   </div>
                 </div>
               )}

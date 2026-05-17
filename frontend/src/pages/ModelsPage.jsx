@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useModels } from '../hooks/useModels'
 
@@ -6,6 +6,23 @@ function formatSize(bytes) {
   if (bytes === null || bytes === undefined) return 'Unknown size'
   const gb = bytes / (1024 ** 3)
   return `${gb.toFixed(2)} GiB`
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return '0 B'
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
+  let value = bytes
+  let index = 0
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024
+    index += 1
+  }
+  return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`
+}
+
+function formatSpeed(bytesPerSecond) {
+  if (!bytesPerSecond) return '-'
+  return `${formatBytes(bytesPerSecond)}/s`
 }
 
 function formatDate(isoDate) {
@@ -28,8 +45,8 @@ function ModelsPage() {
   const [selectedFilePath, setSelectedFilePath] = useState('')
   const [downloadUrl, setDownloadUrl] = useState('')
   const [downloadFilename, setDownloadFilename] = useState('')
-  const [downloading, setDownloading] = useState(false)
-  const [progress, setProgress] = useState(0)
+  const [downloads, setDownloads] = useState([])
+  const [downloadError, setDownloadError] = useState('')
   const [configMessage, setConfigMessage] = useState(null)
   const [configuringModel, setConfiguringModel] = useState('')
   const [autoLoadedRepo, setAutoLoadedRepo] = useState('')
@@ -44,6 +61,7 @@ function ModelsPage() {
   const [speechAliasModalOpen, setSpeechAliasModalOpen] = useState(false)
   const [speechAliasSaving, setSpeechAliasSaving] = useState(false)
   const [speechAliasMessage, setSpeechAliasMessage] = useState('')
+  const seenCompletedDownloads = useRef(new Set())
 
   const handleDelete = async (filename) => {
     if (!confirm(`Delete ${filename}?`)) return
@@ -56,49 +74,69 @@ function ModelsPage() {
     }
   }
 
-  const startDownload = async (url, filename) => {
-    if (!url || !filename) return
+  const loadDownloads = async () => {
+    try {
+      const response = await fetch('/api/models/downloads')
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || 'Failed to load downloads')
+      setDownloads(Array.isArray(data.downloads) ? data.downloads : [])
+      setDownloadError('')
+    } catch (error) {
+      setDownloadError(error.message || 'Failed to load downloads')
+    }
+  }
 
-    setDownloading(true)
-    setProgress(0)
+  useEffect(() => {
+    loadDownloads()
+  }, [])
+
+  useEffect(() => {
+    const hasActiveDownload = downloads.some(item => ['queued', 'downloading'].includes(item.status))
+    if (!hasActiveDownload) return
+    const timer = setInterval(loadDownloads, 1500)
+    return () => clearInterval(timer)
+  }, [downloads])
+
+  useEffect(() => {
+    const completed = downloads.find(item => item.status === 'completed' && !seenCompletedDownloads.current.has(item.task_id))
+    if (completed) {
+      seenCompletedDownloads.current.add(completed.task_id)
+      setLastDownloadedModel(completed.filename)
+      refreshModels()
+    }
+  }, [downloads])
+
+  const startDownload = async (url, filename) => {
+    if (!url) return
+
     setConfigMessage(null)
+    setDownloadError('')
     
     try {
       const response = await fetch('/api/models/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, filename })
+        body: JSON.stringify({ url, filename: filename || '' })
       })
-      if (!response.ok) throw new Error('Failed to start download')
-      const data = await response.json()
-
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-      const ws = new WebSocket(`${wsProtocol}://${window.location.host}/ws/download/${data.task_id}`)
-      
-      ws.onmessage = (event) => {
-        const message = JSON.parse(event.data)
-        if (message.progress !== undefined) {
-          setProgress(message.progress)
-        }
-        if (message.status === 'completed') {
-          setDownloading(false)
-          setProgress(0)
-          setLastDownloadedModel(filename)
-          refreshModels()
-        }
-        if (message.status === 'error') {
-          setDownloading(false)
-          alert(`Download failed: ${message.error}`)
-        }
-      }
-      
-      ws.onclose = () => {
-        setDownloading(false)
-      }
-      
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || 'Failed to start download')
+      await loadDownloads()
     } catch (error) {
-      setDownloading(false)
-      alert('Failed to start download')
+      setDownloadError(error.message || 'Failed to start download')
+    }
+  }
+
+  const controlDownload = async (taskId, action) => {
+    try {
+      const response = await fetch(`/api/models/downloads/${encodeURIComponent(taskId)}${action === 'remove' ? '' : `/${action}`}`, {
+        method: action === 'remove' ? 'DELETE' : 'POST'
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || `Failed to ${action} download`)
+      await loadDownloads()
+      if (action === 'remove') refreshModels()
+    } catch (error) {
+      setDownloadError(error.message || `Failed to ${action} download`)
     }
   }
 
@@ -225,6 +263,8 @@ function ModelsPage() {
     if (modelId) params.set('model', modelId)
     navigate(`/playground${params.toString() ? `?${params.toString()}` : ''}`)
   }
+
+  const hasActiveDownload = downloads.some(item => ['queued', 'downloading'].includes(item.status))
 
   const openSpeechAliasModal = () => {
     const rows = Object.entries(speechAliases || {}).map(([alias, target]) => ({ alias, target }))
@@ -472,7 +512,14 @@ function ModelsPage() {
       )}
       
       <div className="mb-6 card">
-        <h3 className="text-lg font-semibold mb-4">Download Model</h3>
+        <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+          <h3 className="text-lg font-semibold">Download Model</h3>
+          {downloads.length > 0 && (
+            <button onClick={loadDownloads} className="btn btn-secondary text-sm">
+              Downloads: {downloads.filter(item => ['queued', 'downloading'].includes(item.status)).length} active / {downloads.length} total
+            </button>
+          )}
+        </div>
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-1">Hugging Face Repository</label>
@@ -486,7 +533,7 @@ function ModelsPage() {
           </div>
           <button
             onClick={() => fetchRepoFiles()}
-            disabled={repoLoading || downloading || !repoId.trim()}
+            disabled={repoLoading || !repoId.trim()}
             className="btn btn-secondary"
           >
             {repoLoading ? 'Loading files...' : 'Load GGUF Files'}
@@ -517,10 +564,10 @@ function ModelsPage() {
           <div>
             <button
               onClick={handleRepoDownload}
-              disabled={downloading || !selectedFilePath}
+              disabled={!selectedFilePath}
               className="btn btn-primary"
             >
-              {downloading ? 'Downloading...' : 'Download Selected File'}
+              Download Selected File
             </button>
           </div>
 
@@ -538,7 +585,7 @@ function ModelsPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Save As Filename</label>
+                <label className="block text-sm font-medium mb-1">Save As Filename (optional)</label>
                 <input
                   type="text"
                   value={downloadFilename}
@@ -549,7 +596,7 @@ function ModelsPage() {
               </div>
               <button
                 onClick={handleDownload}
-                disabled={downloading || !downloadUrl || !downloadFilename}
+                disabled={!downloadUrl}
                 className="btn btn-secondary"
               >
                 Start Direct Download
@@ -557,16 +604,79 @@ function ModelsPage() {
             </div>
           </details>
 
-          {downloading && (
-            <div className="w-full rounded-full h-2" style={{ background: 'var(--line-soft)' }}>
-              <div
-                className="h-2 rounded-full transition-all"
-                style={{ width: `${progress}%`, background: 'var(--brand)' }}
-              />
+          {downloadError && (
+            <p className="text-sm text-red-500">{downloadError}</p>
+          )}
+
+          {downloads.length > 0 && (
+            <div
+              className="rounded-lg border p-4 space-y-3"
+              style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.06)' }}
+            >
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <p className="font-semibold">Downloads</p>
+                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                    Downloads continue in the backend if this page closes or refreshes.
+                  </p>
+                </div>
+                <button onClick={loadDownloads} className="btn btn-secondary text-sm">
+                  Refresh
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {downloads.map((item) => {
+                  const total = item.total_bytes ? formatBytes(item.total_bytes) : 'unknown'
+                  const downloaded = formatBytes(item.downloaded_bytes)
+                  const canStop = ['queued', 'downloading'].includes(item.status)
+                  const canResume = ['paused', 'error'].includes(item.status)
+                  return (
+                    <div
+                      key={item.task_id}
+                      className="rounded-lg border p-3 space-y-2"
+                      style={{ borderColor: 'var(--line-soft)', background: 'rgba(15, 23, 42, 0.04)' }}
+                    >
+                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                        <div className="min-w-0">
+                          <p className="font-medium break-all">{item.filename}</p>
+                          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                            {item.status} · {downloaded} / {total} · {formatSpeed(item.speed_bytes_per_sec)}
+                          </p>
+                          {item.error && (
+                            <p className="text-sm text-red-500 mt-1">{item.error}</p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {canStop && (
+                            <button onClick={() => controlDownload(item.task_id, 'pause')} className="btn btn-secondary text-sm">
+                              Stop
+                            </button>
+                          )}
+                          {canResume && (
+                            <button onClick={() => controlDownload(item.task_id, 'resume')} className="btn btn-secondary text-sm">
+                              Resume
+                            </button>
+                          )}
+                          <button onClick={() => controlDownload(item.task_id, 'remove')} className="btn btn-danger text-sm">
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                      <div className="w-full rounded-full h-2" style={{ background: 'var(--line-soft)' }}>
+                        <div
+                          className="h-2 rounded-full transition-all"
+                          style={{ width: `${Math.min(Math.max(item.progress || 0, 0), 100)}%`, background: 'var(--brand)' }}
+                        />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           )}
 
-          {lastDownloadedModel && !downloading && (
+          {lastDownloadedModel && !hasActiveDownload && (
             <div
               className="rounded-lg border p-4 space-y-3"
               style={{ borderColor: 'var(--line-soft)', background: 'rgba(148, 163, 184, 0.08)' }}
