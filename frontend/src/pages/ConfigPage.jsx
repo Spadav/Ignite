@@ -277,7 +277,12 @@ function ConfigPage() {
         .toLowerCase()
     if (!image) return 'unknown'
     if (image.includes('ik-llama') || image.includes('ik_llama') || image.includes('ikawrakow')) return 'ik'
-    if (image.includes('llama.cpp')) return 'llama'
+    if (
+      image.includes('llama.cpp') ||
+      image.includes('llama-cpp') ||
+      image.includes('llama_cpp') ||
+      image.includes('ggml-org/llama')
+    ) return 'llama'
     return 'unknown'
   }
 
