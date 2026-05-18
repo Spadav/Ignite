@@ -7,7 +7,6 @@ import os
 import sys
 import re
 import json
-import glob
 import shutil
 import subprocess
 import logging
@@ -339,7 +338,7 @@ def get_speaches_status() -> Dict[str, Any]:
                 models_payload = models_response.json()
                 payload["model_count"] = len(models_payload.get("data") or [])
         except Exception:
-            pass
+            logger.debug("Failed to include speech model count in health payload.", exc_info=True)
         status["reachable"] = True
         status["details"] = payload
         return status
@@ -650,7 +649,7 @@ def recreate_speaches_container(accel: str) -> Dict[str, Any]:
         try:
             existing.stop(timeout=15)
         except Exception:
-            pass
+            logger.debug("Ignoring failure while stopping existing speech container before recreate.", exc_info=True)
         try:
             existing.remove()
         except Exception as exc:
@@ -685,7 +684,7 @@ def recreate_speaches_container(accel: str) -> Dict[str, Any]:
             try:
                 client.networks.get(extra_network).connect(container)
             except Exception:
-                pass
+                logger.debug("Ignoring failure while connecting speech container to extra Docker network.", exc_info=True)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to start speech container: {exc}")
 
@@ -802,7 +801,7 @@ def rebuild_runtime_container(llama_cpp_image: str, llama_swap_version: Optional
     try:
         existing.stop(timeout=20)
     except Exception:
-        pass
+        logger.debug("Ignoring failure while stopping existing runtime container before recreate.", exc_info=True)
     try:
         existing.remove()
     except Exception as exc:
@@ -831,7 +830,7 @@ def rebuild_runtime_container(llama_cpp_image: str, llama_swap_version: Optional
             try:
                 client.networks.get(extra_network).connect(container)
             except Exception:
-                pass
+                logger.debug("Ignoring failure while connecting runtime container to extra Docker network.", exc_info=True)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to start rebuilt runtime container: {exc}")
 
@@ -910,7 +909,7 @@ def recreate_container_with_image(container_name: str, image: str) -> Dict[str, 
     try:
         existing.stop(timeout=20)
     except Exception:
-        pass
+        logger.debug("Ignoring failure while stopping existing support container before recreate.", exc_info=True)
     try:
         existing.remove()
     except Exception as exc:
@@ -935,7 +934,7 @@ def recreate_container_with_image(container_name: str, image: str) -> Dict[str, 
             try:
                 client.networks.get(extra_network).connect(container)
             except Exception:
-                pass
+                logger.debug("Ignoring failure while connecting updated support container to extra Docker network.", exc_info=True)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to start updated container '{container_name}': {exc}")
 
@@ -2064,7 +2063,7 @@ def get_llama_swap_runtime_overview() -> Dict[str, Any]:
                             elif payload_type == "inflight" and isinstance(payload, dict):
                                 inflight_total = int(payload.get("total") or 0)
                         except Exception:
-                            pass
+                            logger.debug("Ignoring malformed llama-swap runtime event payload.", exc_info=True)
 
                     data_lines = []
                     if models and metrics:
@@ -2210,7 +2209,7 @@ def chown_like_parent(path: Path) -> None:
         parent_stat = path.parent.stat()
         os.chown(path, parent_stat.st_uid, parent_stat.st_gid)
     except Exception:
-        pass
+        logger.debug("Unable to match downloaded model ownership to parent directory.", exc_info=True)
 
 
 def serialize_download_task(task: DownloadTask) -> Dict[str, Any]:
@@ -2505,7 +2504,7 @@ def get_effective_hardware_profile() -> Dict[str, Any]:
                 "backend": system.get("backend"),
             }
         except Exception:
-            pass
+            logger.debug("Unable to read llmfit hardware profile; falling back to local GPU stats.", exc_info=True)
 
     gpu = get_gpu_stats()
     return {
@@ -2944,7 +2943,7 @@ def api_remove_model_download(task_id: str):
     try:
         part_path.unlink(missing_ok=True)
     except Exception:
-        pass
+        logger.debug("Unable to remove partial model download file.", exc_info=True)
     return {"removed": task_id}
 
 
