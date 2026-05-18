@@ -33,12 +33,12 @@ import requests
 import docker
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, UploadFile, File, Form, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, HttpUrl, Field
 import uvicorn
 from downloads import ModelDownloadManager
+from logs import LogService
 from model_files import ModelFileService
 
 # Configuration
@@ -1098,6 +1098,14 @@ docker_gpu_preflight_cache: Dict[str, Any] = {"checked_at": None, "result": None
 runtime_versions_cache: Dict[str, Any] = {"checked_at": None, "result": None}
 updates_cache: Dict[str, Any] = {"checked_at": None, "result": None}
 download_manager = ModelDownloadManager(lambda: settings["gguf_directory"], logger)
+log_service = LogService(
+    LLAMA_SWAP_LOG_FILE,
+    get_base_url=get_llama_swap_base_url,
+    is_docker_mode=is_docker_managed_runtime,
+    get_docker_client=get_docker_client,
+    get_container_map=get_docker_log_container_map,
+    logger=logger,
+)
 model_file_service = ModelFileService(lambda: settings["gguf_directory"], logger)
 
 
@@ -1859,91 +1867,6 @@ def stop_llama_swap() -> Dict[str, Any]:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to stop llama-swap: {str(e)}")
-
-
-def get_recent_logs(lines: int = 100) -> List[str]:
-    """Get recent llama-swap logs"""
-    try:
-        if os.path.exists(LLAMA_SWAP_LOG_FILE):
-            with open(LLAMA_SWAP_LOG_FILE, "r") as f:
-                all_lines = f.readlines()
-                return [line.rstrip() for line in all_lines[-lines:]]
-        return []
-    except Exception:
-        return []
-
-
-def get_upstream_logs(lines: int = 100) -> List[str]:
-    """Get model/upstream-related logs by filtering out noisy proxy request lines."""
-    all_logs = get_recent_logs(lines=lines * 6)
-    if not all_logs:
-        return []
-
-    filtered = []
-    for line in all_logs:
-        # Hide routine access logs to keep model process output visible.
-        if "Request " in line and "HTTP/1.1" in line:
-            continue
-        if "GET /v1/models" in line:
-            continue
-        filtered.append(line)
-
-    return filtered[-lines:]
-
-
-def get_docker_container_logs(stream_name: str, lines: int = 200) -> List[str]:
-    if not is_docker_managed_runtime():
-        raise HTTPException(status_code=400, detail="Docker container logs are only available in Docker mode")
-
-    client = get_docker_client()
-    if client is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Docker log access is unavailable. Mount /var/run/docker.sock into the Ignite container.",
-        )
-
-    container_name = get_docker_log_container_map().get(stream_name)
-    if not container_name:
-        raise HTTPException(status_code=404, detail=f"Unknown Docker log stream: {stream_name}")
-
-    try:
-        container = client.containers.get(container_name)
-        raw_logs = container.logs(stdout=True, stderr=True, tail=lines)
-        text = raw_logs.decode("utf-8", errors="replace")
-        return [line.rstrip() for line in text.splitlines() if line.strip()]
-    except docker.errors.NotFound:
-        raise HTTPException(status_code=404, detail=f"Docker container '{container_name}' was not found")
-
-
-def get_llama_swap_events(lines: int = 100) -> List[str]:
-    """Fetch recent llama-swap events from its API, if available."""
-    base_url = get_llama_swap_base_url()
-    try:
-        with requests.get(f"{base_url}/api/events", stream=True, timeout=(0.5, 0.5)) as response:
-            if response.status_code != 200:
-                return []
-
-            content_type = response.headers.get("content-type", "").lower()
-            if "application/json" in content_type:
-                payload = response.json()
-                if isinstance(payload, list):
-                    return [str(item) for item in payload[-lines:]]
-                return [json.dumps(payload)]
-
-            raw_lines: List[str] = []
-            for raw_line in response.iter_lines(decode_unicode=True):
-                if raw_line is None:
-                    continue
-                line = raw_line.strip()
-                if not line:
-                    continue
-                raw_lines.append(line)
-                if len(raw_lines) >= lines:
-                    break
-
-            return raw_lines[-lines:]
-    except Exception:
-        return []
 
 
 def get_llama_swap_model_status() -> List[Dict[str, Any]]:
@@ -2926,66 +2849,31 @@ def api_stop_service():
 @app.get("/api/logs")
 def api_logs(lines: int = 100):
     """Get recent llama-swap logs"""
-    return get_recent_logs(lines)
+    return log_service.get_recent_logs(lines)
 
 
 @app.get("/api/logs/upstream")
 def api_upstream_logs(lines: int = 100):
     """Get recent upstream/model logs (filtered)."""
-    return get_upstream_logs(lines)
+    return log_service.get_upstream_logs(lines)
 
 
 @app.get("/api/logs/docker/{stream_name}")
 def api_docker_logs(stream_name: str, lines: int = 200):
     """Get recent Docker container logs for Ignite-managed services."""
-    return get_docker_container_logs(stream_name, lines)
+    return log_service.get_docker_container_logs(stream_name, lines)
 
 
 @app.get("/api/logs/events")
 def api_log_events(lines: int = 100):
     """Get recent llama-swap event logs from its own API."""
-    events = get_llama_swap_events(lines)
-    if events:
-        return events
-    # Fallback to captured upstream/model logs when events API is empty/unavailable.
-    return get_upstream_logs(lines)
+    return log_service.get_event_logs(lines)
 
 
 @app.get("/api/logs/stream/{stream_type}")
 def api_stream_logs(stream_type: str):
     """Proxy llama-swap SSE log streams to the frontend."""
-    if stream_type not in {"proxy", "upstream"}:
-        raise HTTPException(status_code=404, detail="Unknown stream type")
-
-    target_url = f"{get_llama_swap_base_url()}/logs/stream/{stream_type}"
-
-    def event_generator():
-        try:
-            with requests.get(target_url, stream=True, timeout=(3, None)) as response:
-                if response.status_code != 200:
-                    yield f"data: [error] Upstream returned HTTP {response.status_code}\n\n"
-                    return
-
-                for raw_line in response.iter_lines(decode_unicode=True):
-                    if raw_line is None:
-                        continue
-                    line = raw_line.strip()
-                    if not line:
-                        continue
-                    # Forward every line as a simple SSE data message.
-                    yield f"data: {line}\n\n"
-        except Exception as e:
-            yield f"data: [error] Failed to read {stream_type} stream: {e}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return log_service.stream_logs(stream_type)
 
 
 @app.post("/api/test")
