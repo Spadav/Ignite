@@ -178,6 +178,25 @@ def get_docker_log_container_map() -> Dict[str, str]:
     }
 
 
+def stop_and_remove_container(existing, stop_timeout: int, stop_message: str, remove_error: str) -> None:
+    try:
+        existing.stop(timeout=stop_timeout)
+    except Exception:
+        logger.debug(stop_message, exc_info=True)
+    try:
+        existing.remove()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"{remove_error}: {exc}")
+
+
+def connect_extra_networks(client, container, network_names: List[str], message: str) -> None:
+    for extra_network in network_names[1:]:
+        try:
+            client.networks.get(extra_network).connect(container)
+        except Exception:
+            logger.debug(message, exc_info=True)
+
+
 def get_managed_docker_restart_policies() -> Dict[str, Optional[str]]:
     client = get_docker_client()
     if client is None:
@@ -645,14 +664,12 @@ def recreate_speaches_container(accel: str) -> Dict[str, Any]:
             if normalized_ports:
                 ports = normalized_ports
 
-        try:
-            existing.stop(timeout=15)
-        except Exception:
-            logger.debug("Ignoring failure while stopping existing speech container before recreate.", exc_info=True)
-        try:
-            existing.remove()
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to remove existing speech container: {exc}")
+        stop_and_remove_container(
+            existing,
+            stop_timeout=15,
+            stop_message="Ignoring failure while stopping existing speech container before recreate.",
+            remove_error="Failed to remove existing speech container",
+        )
 
     if not network_names:
         try:
@@ -679,11 +696,12 @@ def recreate_speaches_container(accel: str) -> Dict[str, Any]:
             network=primary_network,
             **gpu_kwargs,
         )
-        for extra_network in network_names[1:]:
-            try:
-                client.networks.get(extra_network).connect(container)
-            except Exception:
-                logger.debug("Ignoring failure while connecting speech container to extra Docker network.", exc_info=True)
+        connect_extra_networks(
+            client,
+            container,
+            network_names,
+            "Ignoring failure while connecting speech container to extra Docker network.",
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to start speech container: {exc}")
 
@@ -797,14 +815,12 @@ def rebuild_runtime_container(llama_cpp_image: str, llama_swap_version: Optional
         })
         labels = {key: value for key, value in labels.items() if value != ""}
 
-    try:
-        existing.stop(timeout=20)
-    except Exception:
-        logger.debug("Ignoring failure while stopping existing runtime container before recreate.", exc_info=True)
-    try:
-        existing.remove()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to remove existing runtime container: {exc}")
+    stop_and_remove_container(
+        existing,
+        stop_timeout=20,
+        stop_message="Ignoring failure while stopping existing runtime container before recreate.",
+        remove_error="Failed to remove existing runtime container",
+    )
 
     gpu_environment, gpu_kwargs = get_docker_gpu_container_options(client)
     environment.update(gpu_environment)
@@ -825,11 +841,12 @@ def rebuild_runtime_container(llama_cpp_image: str, llama_swap_version: Optional
             working_dir=working_dir,
             **gpu_kwargs,
         )
-        for extra_network in network_names[1:]:
-            try:
-                client.networks.get(extra_network).connect(container)
-            except Exception:
-                logger.debug("Ignoring failure while connecting runtime container to extra Docker network.", exc_info=True)
+        connect_extra_networks(
+            client,
+            container,
+            network_names,
+            "Ignoring failure while connecting runtime container to extra Docker network.",
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to start rebuilt runtime container: {exc}")
 
@@ -905,14 +922,12 @@ def recreate_container_with_image(container_name: str, image: str) -> Dict[str, 
         if host_port:
             ports[container_port] = host_port if host_ip in {"0.0.0.0", ""} else (host_ip, host_port)
 
-    try:
-        existing.stop(timeout=20)
-    except Exception:
-        logger.debug("Ignoring failure while stopping existing support container before recreate.", exc_info=True)
-    try:
-        existing.remove()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to remove existing container '{container_name}': {exc}")
+    stop_and_remove_container(
+        existing,
+        stop_timeout=20,
+        stop_message="Ignoring failure while stopping existing support container before recreate.",
+        remove_error=f"Failed to remove existing container '{container_name}'",
+    )
 
     try:
         container = client.containers.run(
@@ -929,11 +944,12 @@ def recreate_container_with_image(container_name: str, image: str) -> Dict[str, 
             entrypoint=entrypoint,
             working_dir=working_dir,
         )
-        for extra_network in network_names[1:]:
-            try:
-                client.networks.get(extra_network).connect(container)
-            except Exception:
-                logger.debug("Ignoring failure while connecting updated support container to extra Docker network.", exc_info=True)
+        connect_extra_networks(
+            client,
+            container,
+            network_names,
+            "Ignoring failure while connecting updated support container to extra Docker network.",
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to start updated container '{container_name}': {exc}")
 
