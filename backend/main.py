@@ -2599,11 +2599,13 @@ class RawConfigRequest(BaseModel):
 
 @app.get("/api/models")
 def api_list_models():
+    """List all GGUF model files with metadata"""
     return model_file_service.list_gguf_files()
 
 
 @app.delete("/api/models/{filename}")
 def api_delete_model(filename: str):
+    """Delete a model file"""
     return model_file_service.delete_model(filename)
 
 
@@ -2646,6 +2648,7 @@ def api_hf_repo_files(repo_id: str = Query(..., description="owner/repo")):
 
 @app.put("/api/models/{old_name}")
 def api_rename_model(old_name: str, new_name: str):
+    """Rename a model file"""
     return model_file_service.rename_model(old_name, new_name)
 
 
@@ -2672,16 +2675,19 @@ def api_get_config():
 
 @app.put("/api/config")
 def api_save_config(config: Dict[str, Any]):
+    """Save llama-swap configuration"""
     return save_config(config)
 
 
 @app.get("/api/config/raw")
 def api_get_config_raw():
+    """Get raw llama-swap configuration text."""
     return {"content": get_config_raw()}
 
 
 @app.put("/api/config/raw")
 def api_save_config_raw(payload: RawConfigRequest):
+    """Save raw llama-swap configuration text."""
     return save_config_raw(payload.content)
 
 
