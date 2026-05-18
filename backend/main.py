@@ -39,6 +39,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, HttpUrl, Field
 import uvicorn
 from downloads import ModelDownloadManager
+from model_files import ModelFileService
 
 # Configuration
 LLAMA_SWAP_PROCESS_FILE = "/tmp/llama_swap.pid"
@@ -1081,6 +1082,7 @@ docker_gpu_preflight_cache: Dict[str, Any] = {"checked_at": None, "result": None
 runtime_versions_cache: Dict[str, Any] = {"checked_at": None, "result": None}
 updates_cache: Dict[str, Any] = {"checked_at": None, "result": None}
 download_manager = ModelDownloadManager(lambda: settings["gguf_directory"], logger)
+model_file_service = ModelFileService(lambda: settings["gguf_directory"], logger)
 
 
 def run_command(cmd: List[str], timeout: float = 30.0) -> subprocess.CompletedProcess:
@@ -2119,39 +2121,6 @@ def request_llama_swap_unload_all() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Failed to unload all models: {exc}")
 
 
-def list_gguf_files() -> List[Dict[str, Any]]:
-    """List all GGUF model files in the directory"""
-    models = []
-    gguf_path = Path(os.path.expanduser(settings["gguf_directory"]))
-    
-    if not gguf_path.exists():
-        return models
-    
-    for file_path in gguf_path.glob("*.gguf"):
-        try:
-            stat = file_path.stat()
-            models.append({
-                "filename": file_path.name,
-                "size_bytes": stat.st_size,
-                "size_gb": round(stat.st_size / (1024**3), 2),
-                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
-            })
-        except Exception:
-            continue
-    
-    return models
-
-
-def delete_model(filename: str) -> Dict[str, Any]:
-    """Delete a model file"""
-    file_path = Path(os.path.expanduser(settings["gguf_directory"])) / filename
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Model file not found")
-    
-    file_path.unlink()
-    return {"deleted": filename}
-
-
 def list_hf_gguf_files(repo_id: str) -> List[Dict[str, Any]]:
     """List GGUF files in a Hugging Face repository."""
     hf_token = os.environ.get("HF_TOKEN")
@@ -2378,20 +2347,6 @@ def get_runtime_gpu_warning(gpu_stats: Dict[str, Any], docker_gpu: Dict[str, Any
         "next_step": "Recreate the stack with `docker compose down && docker compose up -d --build` after confirming host `nvidia-smi` works.",
     }
 
-
-def rename_model(old_name: str, new_name: str) -> Dict[str, Any]:
-    """Rename a model file"""
-    old_path = Path(os.path.expanduser(settings["gguf_directory"])) / old_name
-    new_path = Path(os.path.expanduser(settings["gguf_directory"])) / new_name
-    
-    if not old_path.exists():
-        raise HTTPException(status_code=404, detail="Model file not found")
-    
-    if new_path.exists():
-        raise HTTPException(status_code=409, detail="Target filename already exists")
-    
-    old_path.rename(new_path)
-    return {"renamed": {"from": old_name, "to": new_name}}
 
 
 class DownloadRequest(BaseModel):
@@ -2695,13 +2650,13 @@ class RawConfigRequest(BaseModel):
 @app.get("/api/models")
 def api_list_models():
     """List all GGUF model files with metadata"""
-    return list_gguf_files()
+    return model_file_service.list_gguf_files()
 
 
 @app.delete("/api/models/{filename}")
 def api_delete_model(filename: str):
     """Delete a model file"""
-    return delete_model(filename)
+    return model_file_service.delete_model(filename)
 
 
 @app.post("/api/models/download")
@@ -2744,7 +2699,7 @@ def api_hf_repo_files(repo_id: str = Query(..., description="owner/repo")):
 @app.put("/api/models/{old_name}")
 def api_rename_model(old_name: str, new_name: str):
     """Rename a model file"""
-    return rename_model(old_name, new_name)
+    return model_file_service.rename_model(old_name, new_name)
 
 
 @app.get("/api/models/{filename}/presets")
