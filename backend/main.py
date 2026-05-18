@@ -2121,56 +2121,6 @@ def request_llama_swap_unload_all() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Failed to unload all models: {exc}")
 
 
-def list_hf_gguf_files(repo_id: str) -> List[Dict[str, Any]]:
-    """List GGUF files in a Hugging Face repository."""
-    hf_token = os.environ.get("HF_TOKEN")
-    request_url = f"https://huggingface.co/api/models/{repo_id}"
-    request_params = [("expand[]", "siblings")]
-
-    def fetch_model_info(use_auth: bool) -> requests.Response:
-        headers = {}
-        if use_auth and hf_token:
-            headers["Authorization"] = f"Bearer {hf_token}"
-        return requests.get(
-            request_url,
-            params=request_params,
-            headers=headers,
-            timeout=20,
-        )
-
-    response = fetch_model_info(use_auth=bool(hf_token))
-    if hf_token and response.status_code in {401, 403}:
-        logger.warning("HF_TOKEN was rejected for repo %s; retrying anonymously", repo_id)
-        response = fetch_model_info(use_auth=False)
-
-    if response.status_code == 404:
-        raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=f"Hugging Face API error: {response.text}",
-        )
-
-    data = response.json()
-    siblings = data.get("siblings") or []
-    files = []
-
-    for item in siblings:
-        rfilename = item.get("rfilename") or ""
-        if not rfilename.lower().endswith(".gguf"):
-            continue
-
-        files.append({
-            "path": rfilename,
-            "filename": Path(rfilename).name,
-            "size_bytes": item.get("size"),
-            "download_url": f"https://huggingface.co/{repo_id}/resolve/main/{quote(rfilename, safe='/')}?download=true",
-        })
-
-    files.sort(key=lambda x: x["path"].lower())
-    return files
-
-
 def get_config() -> Dict[str, Any]:
     """Get llama-swap configuration"""
     config_path = os.path.expanduser(settings["llama_swap_config"])
@@ -2693,7 +2643,7 @@ def api_hf_repo_files(repo_id: str = Query(..., description="owner/repo")):
     repo_id = repo_id.strip()
     if not repo_id or "/" not in repo_id:
         raise HTTPException(status_code=400, detail="repo_id must be in format owner/repo")
-    return {"repo_id": repo_id, "files": list_hf_gguf_files(repo_id)}
+    return {"repo_id": repo_id, "files": model_file_service.list_hf_gguf_files(repo_id)}
 
 
 @app.put("/api/models/{old_name}")
