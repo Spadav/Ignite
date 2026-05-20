@@ -2239,7 +2239,6 @@ def api_get_settings():
 
 @app.put("/api/settings", summary="Save settings to settings.json and update in-memory values")
 def api_save_settings(new_settings: Dict[str, Any]):
-    global settings
     requested_speaches_accel = None
     requested_llama_cpp_image = None
     # Only allow known keys
