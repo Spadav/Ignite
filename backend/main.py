@@ -16,7 +16,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Dict, List, Any
 from datetime import datetime, timedelta
-from urllib.parse import quote
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,6 +41,7 @@ from logs import LogService
 from model_config import ModelConfigService
 from model_files import ModelFileService
 from playground import PlaygroundService
+from runtime import LlamaSwapRuntimeService
 from speech import SpeechService
 
 # Configuration
@@ -713,6 +713,7 @@ log_service = LogService(
     get_container_map=get_docker_log_container_map,
     logger=logger,
 )
+runtime_service = LlamaSwapRuntimeService(get_llama_swap_base_url, logger)
 model_file_service = ModelFileService(lambda: settings["gguf_directory"], logger)
 
 
@@ -1492,197 +1493,6 @@ def stop_llama_swap() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Failed to stop llama-swap: {str(e)}")
 
 
-def get_llama_swap_model_status() -> List[Dict[str, Any]]:
-    """Read current model states from llama-swap's SSE event stream."""
-    base_url = get_llama_swap_base_url()
-    data_lines: List[str] = []
-
-    try:
-        with requests.get(f"{base_url}/api/events", stream=True, timeout=(1.0, 1.5)) as response:
-            if response.status_code != 200:
-                return []
-
-            for raw_line in response.iter_lines(decode_unicode=True):
-                if raw_line is None:
-                    continue
-                line = raw_line.strip()
-                if not line:
-                    if data_lines:
-                        payload_text = "\n".join(data_lines)
-                        try:
-                            envelope = json.loads(payload_text)
-                            payload_type = envelope.get("type") if isinstance(envelope, dict) else None
-                            payload = envelope.get("data") if isinstance(envelope, dict) else None
-                            if payload_type == "modelStatus" and isinstance(payload, str):
-                                payload = json.loads(payload)
-                            if payload_type == "modelStatus" and isinstance(payload, list):
-                                normalized = []
-                                for item in payload:
-                                    if not isinstance(item, dict):
-                                        continue
-                                    normalized.append(
-                                        {
-                                            "id": str(item.get("id") or item.get("model") or ""),
-                                            "name": str(item.get("name") or item.get("id") or item.get("model") or ""),
-                                            "state": str(item.get("state") or "unknown"),
-                                            "aliases": item.get("aliases") or [],
-                                            "unlisted": bool(item.get("unlisted", False)),
-                                            "peer_id": item.get("peerID"),
-                                        }
-                                    )
-                                return normalized
-                        except Exception:
-                            return []
-
-                    data_lines = []
-                    continue
-
-                if line.startswith("data:"):
-                    data_lines.append(line.split(":", 1)[1].strip())
-                    continue
-
-        return []
-    except Exception:
-        return []
-
-
-def get_llama_swap_runtime_overview() -> Dict[str, Any]:
-    """Read current runtime model state, metrics, and inflight count from llama-swap's SSE event stream."""
-    base_url = get_llama_swap_base_url()
-    data_lines: List[str] = []
-    models: List[Dict[str, Any]] = []
-    metrics: List[Dict[str, Any]] = []
-    inflight_total = 0
-
-    def normalize_metric_item(item: Dict[str, Any]) -> Dict[str, Any]:
-        normalized = dict(item)
-        tokens = item.get("tokens")
-        if isinstance(tokens, dict):
-            # Preserve the raw nested metrics from newer llama-swap while
-            # restoring the flat fields the current frontend expects.
-            normalized["cache_tokens"] = tokens.get("cache_tokens", normalized.get("cache_tokens", -1))
-            normalized["input_tokens"] = tokens.get("input_tokens", normalized.get("input_tokens", 0))
-            normalized["output_tokens"] = tokens.get("output_tokens", normalized.get("output_tokens", 0))
-            normalized["prompt_per_second"] = tokens.get("prompt_per_second", normalized.get("prompt_per_second", 0))
-            normalized["tokens_per_second"] = tokens.get("tokens_per_second", normalized.get("tokens_per_second", 0))
-        return normalized
-
-    try:
-        with requests.get(f"{base_url}/api/events", stream=True, timeout=(1.0, 2.0)) as response:
-            if response.status_code != 200:
-                return {"models": models, "metrics": metrics, "inflight_total": inflight_total}
-
-            for raw_line in response.iter_lines(decode_unicode=True):
-                if raw_line is None:
-                    continue
-                line = raw_line.strip()
-                if not line:
-                    if data_lines:
-                        payload_text = "\n".join(data_lines)
-                        try:
-                            envelope = json.loads(payload_text)
-                            payload_type = envelope.get("type") if isinstance(envelope, dict) else None
-                            payload = envelope.get("data") if isinstance(envelope, dict) else None
-                            if isinstance(payload, str):
-                                payload = json.loads(payload)
-
-                            if payload_type == "modelStatus" and isinstance(payload, list):
-                                normalized = []
-                                for item in payload:
-                                    if not isinstance(item, dict):
-                                        continue
-                                    normalized.append(
-                                        {
-                                            "id": str(item.get("id") or item.get("model") or ""),
-                                            "name": str(item.get("name") or item.get("id") or item.get("model") or ""),
-                                            "state": str(item.get("state") or "unknown"),
-                                            "aliases": item.get("aliases") or [],
-                                            "unlisted": bool(item.get("unlisted", False)),
-                                            "peer_id": item.get("peerID"),
-                                        }
-                                    )
-                                models = normalized
-                            elif payload_type == "metrics" and isinstance(payload, list):
-                                metrics = [normalize_metric_item(item) for item in payload if isinstance(item, dict)]
-                            elif payload_type == "inflight" and isinstance(payload, dict):
-                                inflight_total = int(payload.get("total") or 0)
-                        except Exception:
-                            logger.debug("Ignoring malformed llama-swap runtime event payload.", exc_info=True)
-
-                    data_lines = []
-                    if models and metrics:
-                        break
-                    continue
-
-                if line.startswith("data:"):
-                    data_lines.append(line.split(":", 1)[1].strip())
-                    continue
-
-        return {"models": models, "metrics": metrics, "inflight_total": inflight_total}
-    except Exception:
-        return {"models": models, "metrics": metrics, "inflight_total": inflight_total}
-
-
-def get_llama_swap_capture(capture_id: int) -> Any:
-    base_url = get_llama_swap_base_url()
-    try:
-        response = requests.get(f"{base_url}/api/captures/{capture_id}", timeout=15)
-        if response.status_code == 404:
-            raise HTTPException(status_code=404, detail="Capture not found")
-        if not response.ok:
-            raise HTTPException(status_code=response.status_code, detail=f"Failed to fetch capture: {response.text[:300]}")
-        return response.json()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch capture: {exc}")
-
-
-def request_llama_swap_model_load(model_id: str) -> Dict[str, Any]:
-    if not model_id:
-        raise HTTPException(status_code=400, detail="Model ID is required")
-
-    base_url = get_llama_swap_base_url()
-    try:
-        response = requests.get(f"{base_url}/upstream/{quote(model_id)}/", timeout=60)
-        if not response.ok:
-            raise HTTPException(status_code=response.status_code, detail=f"Failed to load model: {response.text[:300]}")
-        return {"ok": True, "model_id": model_id, "action": "load"}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to load model: {exc}")
-
-
-def request_llama_swap_model_unload(model_id: str) -> Dict[str, Any]:
-    if not model_id:
-        raise HTTPException(status_code=400, detail="Model ID is required")
-
-    base_url = get_llama_swap_base_url()
-    try:
-        response = requests.post(f"{base_url}/api/models/unload/{quote(model_id)}", timeout=15)
-        if not response.ok:
-            raise HTTPException(status_code=response.status_code, detail=f"Failed to unload model: {response.text[:300]}")
-        return {"ok": True, "model_id": model_id, "action": "unload"}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to unload model: {exc}")
-
-
-def request_llama_swap_unload_all() -> Dict[str, Any]:
-    base_url = get_llama_swap_base_url()
-    try:
-        response = requests.post(f"{base_url}/api/models/unload", timeout=15)
-        if not response.ok:
-            raise HTTPException(status_code=response.status_code, detail=f"Failed to unload all models: {response.text[:300]}")
-        return {"ok": True, "action": "unload_all"}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to unload all models: {exc}")
-
-
 def get_config() -> Dict[str, Any]:
     """Get llama-swap configuration"""
     config_path = os.path.expanduser(settings["llama_swap_config"])
@@ -2039,7 +1849,7 @@ def api_run_update_action(action: str):
 
 @app.get("/api/runtime/models", summary="Get current model states from llama-swap")
 def api_runtime_models():
-    return {"models": get_llama_swap_model_status()}
+    return {"models": runtime_service.get_model_status()}
 
 
 @app.get("/api/speech/registry", summary="List downloadable speech models from the remote Speaches registry")
@@ -2092,27 +1902,27 @@ async def api_speech_test_stt(
 
 @app.get("/api/runtime/overview", summary="Get model states, request metrics, and inflight count from llama-swap")
 def api_runtime_overview():
-    return get_llama_swap_runtime_overview()
+    return runtime_service.get_runtime_overview()
 
 
 @app.get("/api/runtime/captures/{capture_id}", summary="Get a stored request/response capture from llama-swap")
 def api_runtime_capture(capture_id: int):
-    return get_llama_swap_capture(capture_id)
+    return runtime_service.get_capture(capture_id)
 
 
 @app.post("/api/runtime/models/load/{model_id}", summary="Explicitly load a model through llama-swap")
 def api_runtime_model_load(model_id: str):
-    return request_llama_swap_model_load(model_id)
+    return runtime_service.load_model(model_id)
 
 
 @app.post("/api/runtime/models/unload/{model_id}", summary="Explicitly unload a model through llama-swap")
 def api_runtime_model_unload(model_id: str):
-    return request_llama_swap_model_unload(model_id)
+    return runtime_service.unload_model(model_id)
 
 
 @app.post("/api/runtime/models/unload", summary="Unload all currently loaded models")
 def api_runtime_models_unload_all():
-    return request_llama_swap_unload_all()
+    return runtime_service.unload_all()
 
 
 @app.get("/api/status", summary="Get llama-swap status and GPU stats")
