@@ -1374,123 +1374,129 @@ def start_llama_swap() -> Dict[str, Any]:
             return {"running": True, "pid": get_llama_swap_pid()}
 
         if IS_DOCKER or os.environ.get("LLAMA_SWAP_URL"):
-            client = get_docker_client()
-            if client is None:
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "Docker runtime control is unavailable. Mount /var/run/docker.sock into the Ignite "
-                        "container to allow start/stop actions."
-                    ),
-                )
+            return start_docker_runtime()
 
-            started = []
-            runtime_found = False
-            for container_name in [*DOCKER_SUPPORT_CONTAINERS, DOCKER_RUNTIME_CONTAINER]:
-                try:
-                    container = client.containers.get(container_name)
-                    if container_name == DOCKER_RUNTIME_CONTAINER:
-                        runtime_found = True
-                    if container.status != "running":
-                        container.start()
-                        started.append(container_name)
-                except docker.errors.NotFound:
-                    continue
-
-            if not runtime_found:
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        f"Docker runtime container '{DOCKER_RUNTIME_CONTAINER}' was not found. "
-                        "Check the compose stack before using runtime controls."
-                    ),
-                )
-
-            return {
-                "running": is_llama_swap_running(),
-                "pid": None,
-                "message": "Docker runtime start requested",
-                "containers_started": started,
-            }
-
-        swap_dir = os.path.expanduser(settings["llama_swap_dir"])
-        swap_config = os.path.expanduser(settings["llama_swap_config"])
-        swap_port = settings["llama_swap_port"]
-        llama_swap_bin = get_llama_swap_executable()
-        log_handle = open(LLAMA_SWAP_LOG_FILE, "a")
-        process = subprocess.Popen(
-            [
-                llama_swap_bin,
-                "--config", swap_config,
-                "--listen", f"0.0.0.0:{swap_port}",
-            ],
-            cwd=swap_dir,
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        Path(LLAMA_SWAP_PROCESS_FILE).write_text(f"{process.pid}\n")
-
-        return {"running": True, "pid": process.pid, "message": "llama-swap started"}
+        return start_local_llama_swap()
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start llama-swap: {str(e)}")
 
 
+def start_docker_runtime() -> Dict[str, Any]:
+    client = require_docker_runtime_client()
+    started = []
+    runtime_found = False
+    for container_name in [*DOCKER_SUPPORT_CONTAINERS, DOCKER_RUNTIME_CONTAINER]:
+        try:
+            container = client.containers.get(container_name)
+        except docker.errors.NotFound:
+            continue
+        if container_name == DOCKER_RUNTIME_CONTAINER:
+            runtime_found = True
+        if container.status != "running":
+            container.start()
+            started.append(container_name)
+
+    if not runtime_found:
+        raise_runtime_container_not_found()
+
+    return {
+        "running": is_llama_swap_running(),
+        "pid": None,
+        "message": "Docker runtime start requested",
+        "containers_started": started,
+    }
+
+
+def start_local_llama_swap() -> Dict[str, Any]:
+    swap_dir = os.path.expanduser(settings["llama_swap_dir"])
+    swap_config = os.path.expanduser(settings["llama_swap_config"])
+    swap_port = settings["llama_swap_port"]
+    llama_swap_bin = get_llama_swap_executable()
+    log_handle = open(LLAMA_SWAP_LOG_FILE, "a")
+    process = subprocess.Popen(
+        [
+            llama_swap_bin,
+            "--config", swap_config,
+            "--listen", f"0.0.0.0:{swap_port}",
+        ],
+        cwd=swap_dir,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    Path(LLAMA_SWAP_PROCESS_FILE).write_text(f"{process.pid}\n")
+    return {"running": True, "pid": process.pid, "message": "llama-swap started"}
+
+
 def stop_llama_swap() -> Dict[str, Any]:
     """Stop llama-swap and child processes in local mode."""
     try:
         if IS_DOCKER or os.environ.get("LLAMA_SWAP_URL"):
-            client = get_docker_client()
-            if client is None:
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "Docker runtime control is unavailable. Mount /var/run/docker.sock into the Ignite "
-                        "container to allow start/stop actions."
-                    ),
-                )
-            try:
-                container = client.containers.get(DOCKER_RUNTIME_CONTAINER)
-                if container.status == "running":
-                    container.stop(timeout=20)
-                return {"stopped": True, "message": "Docker runtime stopped"}
-            except docker.errors.NotFound:
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        f"Docker runtime container '{DOCKER_RUNTIME_CONTAINER}' was not found. "
-                        "Check the compose stack before using runtime controls."
-                    ),
-                )
+            return stop_docker_runtime()
 
-        llama_swap_bin = get_llama_swap_executable()
-        # Kill llama-server first, then llama-swap
-        for pattern in ["llama-server", llama_swap_bin]:
-            subprocess.run(["pkill", "-f", pattern], capture_output=True)
-
-        import time
-        time.sleep(1)
-
-        # Force kill any survivors
-        for pattern in ["llama-server", llama_swap_bin]:
-            subprocess.run(["pkill", "-9", "-f", pattern], capture_output=True)
-
-        # Close the terminal window by killing the bash shell that has our command
-        swap_dir = os.path.expanduser(settings["llama_swap_dir"])
-        subprocess.run(
-            ["pkill", "-f", f"cd {swap_dir} && {llama_swap_bin}"],
-            capture_output=True
-        )
-
-        if os.path.exists(LLAMA_SWAP_PROCESS_FILE):
-            os.remove(LLAMA_SWAP_PROCESS_FILE)
-        return {"stopped": True}
+        return stop_local_llama_swap()
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to stop llama-swap: {str(e)}")
+
+
+def stop_docker_runtime() -> Dict[str, Any]:
+    client = require_docker_runtime_client()
+    try:
+        container = client.containers.get(DOCKER_RUNTIME_CONTAINER)
+    except docker.errors.NotFound:
+        raise_runtime_container_not_found()
+
+    if container.status == "running":
+        container.stop(timeout=20)
+    return {"stopped": True, "message": "Docker runtime stopped"}
+
+
+def stop_local_llama_swap() -> Dict[str, Any]:
+    llama_swap_bin = get_llama_swap_executable()
+    for pattern in ["llama-server", llama_swap_bin]:
+        subprocess.run(["pkill", "-f", pattern], capture_output=True)
+
+    time.sleep(1)
+
+    for pattern in ["llama-server", llama_swap_bin]:
+        subprocess.run(["pkill", "-9", "-f", pattern], capture_output=True)
+
+    swap_dir = os.path.expanduser(settings["llama_swap_dir"])
+    subprocess.run(
+        ["pkill", "-f", f"cd {swap_dir} && {llama_swap_bin}"],
+        capture_output=True
+    )
+
+    if os.path.exists(LLAMA_SWAP_PROCESS_FILE):
+        os.remove(LLAMA_SWAP_PROCESS_FILE)
+    return {"stopped": True}
+
+
+def require_docker_runtime_client():
+    client = get_docker_client()
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Docker runtime control is unavailable. Mount /var/run/docker.sock into the Ignite "
+                "container to allow start/stop actions."
+            ),
+        )
+    return client
+
+
+def raise_runtime_container_not_found() -> None:
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"Docker runtime container '{DOCKER_RUNTIME_CONTAINER}' was not found. "
+            "Check the compose stack before using runtime controls."
+        ),
+    )
 
 
 def get_config() -> Dict[str, Any]:
