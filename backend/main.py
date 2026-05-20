@@ -41,6 +41,7 @@ from downloads import ModelDownloadManager
 from logs import LogService
 from model_config import ModelConfigService
 from model_files import ModelFileService
+from playground import PlaygroundService
 from speech import SpeechService
 
 # Configuration
@@ -1827,6 +1828,10 @@ model_config_service = ModelConfigService(
     infer_request_mode=infer_request_mode,
     is_docker_mode=is_docker_managed_runtime,
 )
+playground_service = PlaygroundService(
+    get_base_url=get_llama_swap_base_url,
+    get_model_mode=model_config_service.get_configured_model_mode,
+)
 
 
 def get_runtime_gpu_stats() -> Dict[str, Any]:
@@ -2212,93 +2217,7 @@ def api_stream_logs(stream_type: str):
 @app.post("/api/test")
 def api_test_prompt(prompt: TestPrompt):
     """Send a test prompt to the selected model via llama-swap OpenAI-compatible API"""
-    import time
-    try:
-        request_mode = model_config_service.get_configured_model_mode(prompt.model)
-        endpoint = "/v1/chat/completions"
-        payload: Dict[str, Any]
-        image_data_url = (prompt.image_data_url or "").strip()
-        max_tokens = prompt.max_tokens if prompt.max_tokens is not None else 512
-        generation_settings = {
-            "max_tokens": max_tokens,
-        }
-        for key in ["temperature", "top_p", "top_k", "min_p", "repeat_penalty", "seed"]:
-            value = getattr(prompt, key)
-            if value is not None:
-                generation_settings[key] = value
-        if prompt.stop:
-            generation_settings["stop"] = [item for item in prompt.stop if str(item).strip()]
-
-        if request_mode == "completion":
-            if image_data_url:
-                raise HTTPException(status_code=400, detail="Completion models do not support image input in Test.")
-            endpoint = "/v1/completions"
-            payload = {
-                "prompt": prompt.prompt,
-                **generation_settings,
-            }
-        else:
-            user_content: Any
-            if image_data_url:
-                user_content = []
-                if prompt.prompt.strip():
-                    user_content.append({"type": "text", "text": prompt.prompt})
-                user_content.append({"type": "image_url", "image_url": {"url": image_data_url}})
-            else:
-                user_content = prompt.prompt
-
-            payload = {
-                "messages": [{"role": "user", "content": user_content}],
-                **generation_settings,
-            }
-
-        if prompt.model:
-            payload["model"] = prompt.model
-
-        start = time.time()
-        response = requests.post(
-            f"{get_llama_swap_base_url()}{endpoint}",
-            json=payload,
-            timeout=120
-        )
-        duration_ms = int((time.time() - start) * 1000)
-
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-
-        result = response.json()
-        choice = result.get("choices", [{}])[0]
-        if request_mode == "completion":
-            content = choice.get("text", "")
-            reasoning = ""
-        else:
-            message = choice.get("message", {})
-            content = message.get("content", "")
-            reasoning = message.get("reasoning_content", "")
-        usage = result.get("usage", {})
-        timings = result.get("timings", {})
-        tokens = usage.get("completion_tokens", 0)
-
-        return {
-            "response": content,
-            "reasoning": reasoning,
-            "tokens": tokens,
-            "duration_ms": duration_ms,
-            "model": result.get("model", prompt.model),
-            "usage": usage,
-            "timings": timings,
-            "id": result.get("id"),
-            "object": result.get("object"),
-            "created": result.get("created"),
-            "system_fingerprint": result.get("system_fingerprint"),
-            "finish_reason": choice.get("finish_reason"),
-            "request_mode": request_mode,
-            "request_settings": generation_settings,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Request failed: {str(e)}")
+    return playground_service.test_prompt(prompt)
 
 
 @app.websocket("/ws/download/{task_id}")
