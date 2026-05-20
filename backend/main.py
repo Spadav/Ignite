@@ -1915,28 +1915,24 @@ class RawConfigRequest(BaseModel):
     content: str
 
 
-@app.get("/api/models")
+@app.get("/api/models", summary="List all GGUF model files with metadata")
 def api_list_models():
-    """List all GGUF model files with metadata"""
     return model_file_service.list_gguf_files()
 
 
-@app.delete("/api/models/{filename}")
+@app.delete("/api/models/{filename}", summary="Delete a model file")
 def api_delete_model(filename: str):
-    """Delete a model file"""
     return model_file_service.delete_model(filename)
 
 
-@app.post("/api/models/download")
+@app.post("/api/models/download", summary="Start downloading a model from HuggingFace")
 def api_download_model(req: DownloadRequest):
-    """Start downloading a model from HuggingFace"""
     task_id = download_manager.download_model(req.url, req.filename)
     return {"task_id": task_id, "status": "started"}
 
 
-@app.get("/api/models/downloads")
+@app.get("/api/models/downloads", summary="List active and recent model download tasks")
 def api_list_model_downloads():
-    """List active and recent model download tasks."""
     return {"downloads": download_manager.list_tasks()}
 
 
@@ -1955,24 +1951,24 @@ def api_remove_model_download(task_id: str):
     return download_manager.remove(task_id)
 
 
-@app.get("/api/hf/repo-files")
+@app.get("/api/hf/repo-files", summary="List GGUF files for a Hugging Face repository")
 def api_hf_repo_files(repo_id: str = Query(..., description="owner/repo")):
-    """List GGUF files for a Hugging Face repository."""
     repo_id = repo_id.strip()
     if not repo_id or "/" not in repo_id:
         raise HTTPException(status_code=400, detail="repo_id must be in format owner/repo")
     return {"repo_id": repo_id, "files": model_file_service.list_hf_gguf_files(repo_id)}
 
 
-@app.put("/api/models/{old_name}")
+@app.put("/api/models/{old_name}", summary="Rename a model file")
 def api_rename_model(old_name: str, new_name: str):
-    """Rename a model file"""
     return model_file_service.rename_model(old_name, new_name)
 
 
-@app.get("/api/models/{filename}/presets")
+@app.get(
+    "/api/models/{filename}/presets",
+    summary="Generate launch presets for a model based on detected hardware and file characteristics",
+)
 def api_model_presets(filename: str):
-    """Generate launch presets for a model based on detected hardware and file characteristics."""
     hardware = get_effective_hardware_profile()
     return {
         "filename": filename,
@@ -1984,40 +1980,37 @@ def api_model_presets(filename: str):
     }
 
 
-@app.get("/api/config")
+@app.get("/api/config", summary="Get llama-swap configuration")
 def api_get_config():
-    """Get llama-swap configuration"""
     logger.info("API: /api/config called")
     return get_config()
 
 
-@app.put("/api/config")
+@app.put("/api/config", summary="Save llama-swap configuration")
 def api_save_config(config: Dict[str, Any]):
-    """Save llama-swap configuration"""
     return save_config(config)
 
 
-@app.get("/api/config/raw")
+@app.get("/api/config/raw", summary="Get raw llama-swap configuration text")
 def api_get_config_raw():
-    """Get raw llama-swap configuration text."""
     return {"content": get_config_raw()}
 
 
-@app.put("/api/config/raw")
+@app.put("/api/config/raw", summary="Save raw llama-swap configuration text")
 def api_save_config_raw(payload: RawConfigRequest):
-    """Save raw llama-swap configuration text."""
     return save_config_raw(payload.content)
 
 
-@app.get("/api/config/guide")
+@app.get("/api/config/guide", summary="Get the bundled llama-swap config example as a guide")
 def api_get_config_guide():
-    """Get the bundled llama-swap config example as a guide."""
     return {"content": get_config_guide()}
 
 
-@app.post("/api/config/add-model")
+@app.post(
+    "/api/config/add-model",
+    summary="Append a discovered GGUF model to the active llama-swap config with generated defaults",
+)
 def api_add_model_to_config(request: AddModelToConfigRequest):
-    """Append a discovered GGUF model to the active llama-swap config with generated defaults."""
     return model_config_service.add_model_to_config(
         filename=request.filename,
         model_id=request.config_key,
@@ -2026,54 +2019,46 @@ def api_add_model_to_config(request: AddModelToConfigRequest):
     )
 
 
-@app.get("/api/discover/recommendations")
+@app.get("/api/discover/recommendations", summary="Proxy llmfit recommendations for the current machine")
 def api_discover_recommendations(
     use_case: str = Query("chat", description="Recommendation profile such as chat or coding"),
     limit: int = Query(6, ge=1, le=12),
 ):
-    """Proxy llmfit recommendations for the current machine."""
     return get_llmfit_recommendations(use_case=use_case, limit=limit)
 
 
-@app.get("/api/updates")
+@app.get("/api/updates", summary="Get current versions, update signals, and changelog links")
 def api_get_updates(refresh: bool = Query(False)):
-    """Get current versions, update signals, and changelog links for Ignite runtime components."""
     return get_updates_payload(refresh=refresh)
 
 
-@app.post("/api/updates/actions/{action}")
+@app.post("/api/updates/actions/{action}", summary="Run a managed update action for one Docker-backed Ignite service")
 def api_run_update_action(action: str):
-    """Run a managed update action for one Docker-backed Ignite service."""
     return run_update_action(action)
 
 
-@app.get("/api/runtime/models")
+@app.get("/api/runtime/models", summary="Get current model states from llama-swap")
 def api_runtime_models():
-    """Get current model states from llama-swap."""
     return {"models": get_llama_swap_model_status()}
 
 
-@app.get("/api/speech/registry")
+@app.get("/api/speech/registry", summary="List downloadable speech models from the remote Speaches registry")
 def api_speech_registry(task: str = Query(""), search: str = Query("")):
-    """List downloadable speech models from the remote Speaches registry."""
     return speech_service.get_registry(task=task, search=search)
 
 
-@app.get("/api/speech/models")
+@app.get("/api/speech/models", summary="List locally installed speech models")
 def api_speech_models():
-    """List locally installed speech models."""
     return speech_service.get_installed_models()
 
 
-@app.get("/api/speech/voices")
+@app.get("/api/speech/voices", summary="List available voices from the speech service")
 def api_speech_voices(model: str = Query("")):
-    """List available voices from the speech service."""
     return speech_service.get_voices(model=model)
 
 
-@app.get("/api/speech/aliases")
+@app.get("/api/speech/aliases", summary="Read OpenAI-compatible speech aliases from the shared audio folder")
 def api_speech_aliases():
-    """Read OpenAI-compatible speech aliases from the shared audio folder."""
     return {
         "aliases": speech_service.read_aliases(),
         "file": str(speech_service.get_alias_runtime_file()),
@@ -2081,67 +2066,57 @@ def api_speech_aliases():
     }
 
 
-@app.put("/api/speech/aliases")
+@app.put("/api/speech/aliases", summary="Save speech aliases and restart Speaches so its alias cache reloads")
 def api_save_speech_aliases(request: SpeechAliasesRequest):
-    """Save speech aliases and restart Speaches so its alias cache reloads."""
     return speech_service.write_aliases(request.aliases)
 
 
-@app.post("/api/speech/models/install/{model_id:path}")
+@app.post("/api/speech/models/install/{model_id:path}", summary="Download or install a speech model through Speaches")
 def api_speech_model_install(model_id: str):
-    """Download or install a speech model through Speaches."""
     return speech_service.install_model(model_id)
 
 
-@app.post("/api/speech/test/tts")
+@app.post("/api/speech/test/tts", summary="Synthesize speech through Speaches and return audio bytes")
 def api_speech_test_tts(request: SpeechSynthesisRequest):
-    """Synthesize speech through Speaches and return audio bytes."""
     content, media_type = speech_service.synthesize(request.model, request.input, request.voice)
     return Response(content=content, media_type=media_type)
 
 
-@app.post("/api/speech/test/stt")
+@app.post("/api/speech/test/stt", summary="Transcribe speech through Speaches and return JSON")
 async def api_speech_test_stt(
     model: str = Form(...),
     file: UploadFile = File(...),
 ):
-    """Transcribe speech through Speaches and return JSON."""
     return await speech_service.transcribe(model, file)
 
 
-@app.get("/api/runtime/overview")
+@app.get("/api/runtime/overview", summary="Get model states, request metrics, and inflight count from llama-swap")
 def api_runtime_overview():
-    """Get model states, request metrics, and inflight count from llama-swap."""
     return get_llama_swap_runtime_overview()
 
 
-@app.get("/api/runtime/captures/{capture_id}")
+@app.get("/api/runtime/captures/{capture_id}", summary="Get a stored request/response capture from llama-swap")
 def api_runtime_capture(capture_id: int):
-    """Get a stored request/response capture from llama-swap."""
     return get_llama_swap_capture(capture_id)
 
 
-@app.post("/api/runtime/models/load/{model_id}")
+@app.post("/api/runtime/models/load/{model_id}", summary="Explicitly load a model through llama-swap")
 def api_runtime_model_load(model_id: str):
-    """Explicitly load a model through llama-swap."""
     return request_llama_swap_model_load(model_id)
 
 
-@app.post("/api/runtime/models/unload/{model_id}")
+@app.post("/api/runtime/models/unload/{model_id}", summary="Explicitly unload a model through llama-swap")
 def api_runtime_model_unload(model_id: str):
-    """Explicitly unload a model through llama-swap."""
     return request_llama_swap_model_unload(model_id)
 
 
-@app.post("/api/runtime/models/unload")
+@app.post("/api/runtime/models/unload", summary="Unload all currently loaded models")
 def api_runtime_models_unload_all():
-    """Unload all currently loaded models."""
     return request_llama_swap_unload_all()
 
 
-@app.get("/api/status")
+@app.get("/api/status", summary="Get llama-swap status and GPU stats")
 def api_status():
-    """Get llama-swap status and GPU stats"""
     logger.info("API: /api/status called")
     running = is_llama_swap_running()
     pid = get_llama_swap_pid() if running else None
@@ -2172,51 +2147,43 @@ def api_status():
     }
 
 
-@app.post("/api/service/start")
+@app.post("/api/service/start", summary="Start llama-swap service")
 def api_start_service():
-    """Start llama-swap service"""
     return start_llama_swap()
 
 
-@app.post("/api/service/stop")
+@app.post("/api/service/stop", summary="Stop llama-swap service")
 def api_stop_service():
-    """Stop llama-swap service"""
     return stop_llama_swap()
 
 
-@app.get("/api/logs")
+@app.get("/api/logs", summary="Get recent llama-swap logs")
 def api_logs(lines: int = 100):
-    """Get recent llama-swap logs"""
     return log_service.get_recent_logs(lines)
 
 
-@app.get("/api/logs/upstream")
+@app.get("/api/logs/upstream", summary="Get recent upstream/model logs")
 def api_upstream_logs(lines: int = 100):
-    """Get recent upstream/model logs (filtered)."""
     return log_service.get_upstream_logs(lines)
 
 
-@app.get("/api/logs/docker/{stream_name}")
+@app.get("/api/logs/docker/{stream_name}", summary="Get recent Docker container logs for Ignite-managed services")
 def api_docker_logs(stream_name: str, lines: int = 200):
-    """Get recent Docker container logs for Ignite-managed services."""
     return log_service.get_docker_container_logs(stream_name, lines)
 
 
-@app.get("/api/logs/events")
+@app.get("/api/logs/events", summary="Get recent llama-swap event logs from its own API")
 def api_log_events(lines: int = 100):
-    """Get recent llama-swap event logs from its own API."""
     return log_service.get_event_logs(lines)
 
 
-@app.get("/api/logs/stream/{stream_type}")
+@app.get("/api/logs/stream/{stream_type}", summary="Proxy llama-swap SSE log streams to the frontend")
 def api_stream_logs(stream_type: str):
-    """Proxy llama-swap SSE log streams to the frontend."""
     return log_service.stream_logs(stream_type)
 
 
-@app.post("/api/test")
+@app.post("/api/test", summary="Send a test prompt to the selected model via llama-swap")
 def api_test_prompt(prompt: TestPrompt):
-    """Send a test prompt to the selected model via llama-swap OpenAI-compatible API"""
     return playground_service.test_prompt(prompt)
 
 
@@ -2238,9 +2205,8 @@ async def websocket_download(websocket: WebSocket, task_id: str):
         await websocket.close()
 
 
-@app.get("/api/settings")
+@app.get("/api/settings", summary="Get current settings")
 def api_get_settings():
-    """Get current settings"""
     docker_restart_policies = get_managed_docker_restart_policies() if is_docker_managed_runtime() else {}
     docker_restart_policy = get_docker_restart_policy_name() if is_docker_managed_runtime() else None
     runtime_refs = parse_current_runtime_refs() if is_docker_managed_runtime() else None
@@ -2271,9 +2237,8 @@ def api_get_settings():
     }
 
 
-@app.put("/api/settings")
+@app.put("/api/settings", summary="Save settings to settings.json and update in-memory values")
 def api_save_settings(new_settings: Dict[str, Any]):
-    """Save settings to settings.json and update in-memory values"""
     global settings
     requested_speaches_accel = None
     requested_llama_cpp_image = None
@@ -2303,9 +2268,8 @@ def api_save_settings(new_settings: Dict[str, Any]):
     return api_get_settings()
 
 
-@app.get("/health")
+@app.get("/health", summary="Health check endpoint")
 def health_check():
-    """Health check endpoint"""
     return {"status": "ok", "timestamp": datetime.now().isoformat()}
 
 
