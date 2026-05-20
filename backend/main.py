@@ -1686,7 +1686,11 @@ def get_runtime_gpu_warning(gpu_stats: Dict[str, Any], docker_gpu: Dict[str, Any
             "A GPU is present on the host, but the running llama-runtime container currently sees zero CUDA devices. "
             "Models pinned with `--main-gpu 0` or advanced GPU assignment can fail until the stack is recreated cleanly."
         ),
-        "next_step": "Recreate the stack with `docker compose down && docker compose up -d --build` after confirming host `nvidia-smi` works.",
+        "next_step": (
+            "Recreate the stack with `./scripts/rebuild.sh` after confirming host `nvidia-smi` works. "
+            "If running Compose manually, include the GPU override file, for example "
+            "`docker compose -f docker-compose.yml -f docker-compose.gpu-cdi.yml up -d --build`."
+        ),
     }
 
 

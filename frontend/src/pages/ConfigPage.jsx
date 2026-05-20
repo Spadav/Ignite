@@ -68,16 +68,14 @@ function ConfigPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [expandedFamilies, setExpandedFamilies] = useState({})
-  const [selectedFolderFilter, setSelectedFolderFilter] = useState('all')
   const [selectedFamilyProfiles, setSelectedFamilyProfiles] = useState({})
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [message, setMessage] = useState(null)
   const [editorMode, setEditorMode] = useState('structured')
-  const [folderModal, setFolderModal] = useState(null)
   const [groupHelpOpen, setGroupHelpOpen] = useState(false)
-  const [folderNameDraft, setFolderNameDraft] = useState('')
-  const [folderSelectionDraft, setFolderSelectionDraft] = useState({})
   const [envDrafts, setEnvDrafts] = useState({})
+  const [installedModels, setInstalledModels] = useState([])
+  const [archiveOpen, setArchiveOpen] = useState(false)
 
   useEffect(() => {
     fetchConfig()
@@ -85,19 +83,21 @@ function ConfigPage() {
 
   const fetchConfig = async () => {
     try {
-      const [configResponse, rawResponse, settingsResponse, statusResponse] = await Promise.all([
+      const [configResponse, rawResponse, settingsResponse, statusResponse, modelsResponse] = await Promise.all([
         fetch('/api/config'),
         fetch('/api/config/raw'),
         fetch('/api/settings'),
-        fetch('/api/status')
+        fetch('/api/status'),
+        fetch('/api/models')
       ])
 
-      if (!configResponse.ok || !rawResponse.ok || !settingsResponse.ok || !statusResponse.ok) throw new Error('API error')
+      if (!configResponse.ok || !rawResponse.ok || !settingsResponse.ok || !statusResponse.ok || !modelsResponse.ok) throw new Error('API error')
 
       const configData = await configResponse.json()
       const rawData = await rawResponse.json()
       const settingsData = await settingsResponse.json()
       const statusData = await statusResponse.json()
+      const modelsData = await modelsResponse.json()
       const nextEnvDrafts = {}
       for (const [modelKey, model] of Object.entries(configData.models || {})) {
         nextEnvDrafts[modelKey] = serializeEnv(model.env)
@@ -111,12 +111,14 @@ function ConfigPage() {
       setGpuStatus(statusData?.gpu || null)
       setRuntimeGpuWarning(statusData?.runtime_gpu_warning || null)
       setEnvDrafts(nextEnvDrafts)
+      setInstalledModels(Array.isArray(modelsData) ? modelsData : [])
       setMessage(null)
     } catch (error) {
       setConfig(null)
       setRuntimeProfile('unknown')
       setGpuStatus(null)
       setRuntimeGpuWarning(null)
+      setInstalledModels([])
     } finally {
       setLoading(false)
     }
@@ -175,8 +177,8 @@ function ConfigPage() {
     setGuideOpen(true)
   }
 
-  const toggleFamily = (familyName) => {
-    setExpandedFamilies(prev => ({ ...prev, [familyName]: !(prev[familyName] ?? true) }))
+  const toggleFamily = (familyKey) => {
+    setExpandedFamilies(prev => ({ ...prev, [familyKey]: !(prev[familyKey] ?? false) }))
   }
 
   const handleModelChange = (modelKey, field, value) => {
@@ -406,13 +408,35 @@ function ConfigPage() {
     }))
   }
 
-  const getModelFolder = (model) => {
-    return String(model?.metadata?.igniteFolder || '').trim()
+  const getModelPathFromCmd = (cmd) => {
+    const match = String(cmd || '').match(/(?:^|\s)(?:-m|--model)\s+("[^"]+"|'[^']+'|[^\s]+)/)
+    const rawPath = match?.[1] || ''
+    return rawPath.replace(/^['"]|['"]$/g, '')
   }
 
-  const getModelPathFromCmd = (cmd) => {
-    const match = String(cmd || '').match(/(?:^|\s)-m\s+([^\s]+)/)
-    return match?.[1] || ''
+  const getModelFilename = (model) => {
+    const path = getModelPathFromCmd(model?.cmd)
+    if (!path) return ''
+    const filename = path.split('/').pop() || path
+    return filename.toLowerCase().endsWith('.gguf') ? filename : ''
+  }
+
+  const getInstalledModelFilenameSet = () => {
+    return new Set(installedModels.map((model) => String(model?.filename || '').trim()).filter(Boolean))
+  }
+
+  const isArchivedModelConfig = (model) => {
+    const filename = getModelFilename(model)
+    if (!filename) return false
+    return !getInstalledModelFilenameSet().has(filename)
+  }
+
+  const getProfileTag = (model) => {
+    const explicit = String(model?.metadata?.igniteTag || '').trim()
+    if (explicit) return explicit
+
+    // Temporary migration bridge: old folders now behave as profile tags.
+    return String(model?.metadata?.igniteFolder || '').trim()
   }
 
   const getFileStem = (path) => {
@@ -423,15 +447,31 @@ function ConfigPage() {
   }
 
   const getModelFamily = (modelKey, model) => {
-    const explicit = String(model?.metadata?.igniteFamily || '').trim()
-    if (explicit) return explicit
+    const filename = getModelFilename(model)
+    if (filename) return getFileStem(filename)
 
     const modelPath = getModelPathFromCmd(model?.cmd)
     const pathStem = getFileStem(modelPath)
     if (pathStem) return pathStem
 
+    const explicit = String(model?.metadata?.igniteFamily || '').trim()
+    if (explicit) return explicit
+
     const displayName = String(model?.name || '').trim()
     if (displayName) return displayName
+
+    return modelKey
+  }
+
+  const getModelFamilyKey = (modelKey, model) => {
+    const filename = getModelFilename(model)
+    if (filename) return filename
+
+    const modelPath = getModelPathFromCmd(model?.cmd)
+    if (modelPath) return modelPath
+
+    const explicit = String(model?.metadata?.igniteFamily || '').trim()
+    if (explicit) return explicit
 
     return modelKey
   }
@@ -471,61 +511,75 @@ function ConfigPage() {
     })
   }
 
-  const getFolderOptions = () => {
-    const folderNames = new Set()
-    for (const model of Object.values(config?.models || {})) {
-      folderNames.add(getModelFolder(model) || 'Ungrouped')
-    }
+  const handleProfileTagChange = (modelKey, value) => {
+    setConfig(prev => {
+      const currentModel = prev.models[modelKey]
+      const nextMetadata = { ...(currentModel.metadata || {}) }
+      const trimmed = String(value || '').trim()
+      delete nextMetadata.igniteFolder
 
-    return Array.from(folderNames).sort((a, b) => {
-      if (a === 'Ungrouped') return 1
-      if (b === 'Ungrouped') return -1
-      return a.localeCompare(b)
+      if (trimmed) {
+        nextMetadata.igniteTag = trimmed
+      } else {
+        delete nextMetadata.igniteTag
+      }
+
+      return {
+        ...prev,
+        models: {
+          ...prev.models,
+          [modelKey]: {
+            ...currentModel,
+            ...(Object.keys(nextMetadata).length > 0 ? { metadata: nextMetadata } : { metadata: undefined })
+          }
+        }
+      }
     })
   }
 
   const getFamilyGroups = (entries) => {
     const grouped = {}
     for (const [modelKey, model] of entries) {
-      const family = getModelFamily(modelKey, model)
-      if (!grouped[family]) grouped[family] = []
-      grouped[family].push([modelKey, model])
+      const familyKey = getModelFamilyKey(modelKey, model)
+      if (!grouped[familyKey]) {
+        grouped[familyKey] = {
+          familyKey,
+          familyName: getModelFamily(modelKey, model),
+          familyEntries: []
+        }
+      }
+      grouped[familyKey].familyEntries.push([modelKey, model])
     }
 
-    return Object.entries(grouped)
-      .map(([familyName, familyEntries]) => [
-        familyName,
-        [...familyEntries].sort(([aKey], [bKey]) => aKey.localeCompare(bKey))
-      ])
-      .sort(([a], [b]) => a.localeCompare(b))
+    return Object.values(grouped)
+      .map((group) => ({
+        ...group,
+        familyEntries: [...group.familyEntries].sort(([aKey], [bKey]) => aKey.localeCompare(bKey))
+      }))
+      .sort((a, b) => a.familyName.localeCompare(b.familyName))
   }
 
-  const getVisibleFamilyGroups = () => {
-    const visibleEntries = Object.entries(config?.models || {}).filter(([, model]) => {
-      if (selectedFolderFilter === 'all') return true
-      const folderName = getModelFolder(model) || 'Ungrouped'
-      return folderName === selectedFolderFilter
-    })
+  const getFamilyGroupsByArchiveState = (archived) => {
+    const entries = Object.entries(config?.models || {})
+      .filter(([, model]) => isArchivedModelConfig(model) === archived)
 
-    return getFamilyGroups(visibleEntries).map(([familyName, familyEntries]) => {
-      const folders = Array.from(new Set(
-        familyEntries.map(([, model]) => getModelFolder(model) || 'Ungrouped')
-      )).sort((a, b) => a.localeCompare(b))
-
-      return { familyName, familyEntries, folders }
-    })
+    return getFamilyGroups(entries)
   }
 
-  const getSelectedFamilyProfile = (familyName, familyEntries) => {
-    const current = selectedFamilyProfiles[familyName]
+  const getScopedFamilyKey = (sectionKey, familyKey) => {
+    return `${sectionKey}:${familyKey}`
+  }
+
+  const getSelectedFamilyProfile = (scopedFamilyKey, familyEntries) => {
+    const current = selectedFamilyProfiles[scopedFamilyKey]
     if (current && familyEntries.some(([key]) => key === current)) {
       return current
     }
     return familyEntries[0]?.[0] || ''
   }
 
-  const selectFamilyProfile = (familyName, modelKey) => {
-    setSelectedFamilyProfiles(prev => ({ ...prev, [familyName]: modelKey }))
+  const selectFamilyProfile = (scopedFamilyKey, modelKey) => {
+    setSelectedFamilyProfiles(prev => ({ ...prev, [scopedFamilyKey]: modelKey }))
   }
 
   const getRuntimeGroups = () => {
@@ -625,87 +679,6 @@ function ConfigPage() {
         ...(Object.keys(nextGroups).length > 0 ? { groups: nextGroups } : { groups: undefined })
       }
     })
-  }
-
-  const openCreateFolderModal = () => {
-    const nextSelection = {}
-    for (const modelKey of Object.keys(config?.models || {})) {
-      nextSelection[modelKey] = false
-    }
-    setFolderModal({ mode: 'create', previousName: '' })
-    setFolderNameDraft('')
-    setFolderSelectionDraft(nextSelection)
-  }
-
-  const openManageFolderModal = (folderName) => {
-    const nextSelection = {}
-    for (const [modelKey, model] of Object.entries(config?.models || {})) {
-      nextSelection[modelKey] = getModelFolder(model) === folderName
-    }
-    setFolderModal({ mode: 'edit', previousName: folderName })
-    setFolderNameDraft(folderName)
-    setFolderSelectionDraft(nextSelection)
-  }
-
-  const closeFolderModal = () => {
-    setFolderModal(null)
-    setFolderNameDraft('')
-    setFolderSelectionDraft({})
-  }
-
-  const toggleFolderSelection = (modelKey) => {
-    setFolderSelectionDraft(prev => ({ ...prev, [modelKey]: !prev[modelKey] }))
-  }
-
-  const saveFolderModal = () => {
-    const trimmedName = folderNameDraft.trim()
-    if (!trimmedName) {
-      setMessage({ type: 'error', text: 'Folder name cannot be empty' })
-      return
-    }
-
-    const previousName = folderModal?.previousName || ''
-    const nextModels = {}
-
-    for (const [modelKey, model] of Object.entries(config?.models || {})) {
-      const currentFolder = getModelFolder(model)
-      const selected = Boolean(folderSelectionDraft[modelKey])
-      const nextMetadata = { ...(model.metadata || {}) }
-
-      if (selected) {
-        nextMetadata.igniteFolder = trimmedName
-      } else if (currentFolder === trimmedName || (previousName && currentFolder === previousName)) {
-        delete nextMetadata.igniteFolder
-      }
-
-      nextModels[modelKey] = {
-        ...model,
-        ...(Object.keys(nextMetadata).length > 0 ? { metadata: nextMetadata } : { metadata: undefined }),
-      }
-    }
-
-    setConfig(prev => ({ ...prev, models: nextModels }))
-    closeFolderModal()
-  }
-
-  const removeFolder = (folderName) => {
-    const nextModels = {}
-    for (const [modelKey, model] of Object.entries(config?.models || {})) {
-      const currentFolder = getModelFolder(model)
-      if (currentFolder !== folderName) {
-        nextModels[modelKey] = model
-        continue
-      }
-
-      const nextMetadata = { ...(model.metadata || {}) }
-      delete nextMetadata.igniteFolder
-      nextModels[modelKey] = {
-        ...model,
-        ...(Object.keys(nextMetadata).length > 0 ? { metadata: nextMetadata } : { metadata: undefined }),
-      }
-    }
-
-    setConfig(prev => ({ ...prev, models: nextModels }))
   }
 
   const removeAliases = (modelKey) => {
@@ -850,20 +823,6 @@ function ConfigPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Model Family</label>
-              <input
-                type="text"
-                value={String(model.metadata?.igniteFamily || '')}
-                onChange={(e) => handleMetadataFieldChange(key, 'igniteFamily', e.target.value)}
-                placeholder={getModelFamily(key, model)}
-                className={inputClass}
-              />
-              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                Visual grouping only. Keep config names unique for agents and harnesses.
-              </p>
-            </div>
-
-            <div>
               <label className="block text-sm font-medium mb-1">Profile Label</label>
               <input
                 type="text"
@@ -874,6 +833,20 @@ function ConfigPage() {
               />
               <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
                 Example: `No Thinking`, `Harness A`, `Creative`, `Agent`.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Profile Tag</label>
+              <input
+                type="text"
+                value={getProfileTag(model)}
+                onChange={(e) => handleProfileTagChange(key, e.target.value)}
+                placeholder="Coding, RP, Agent..."
+                className={inputClass}
+              />
+              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                Optional use-case chip shown on the profile tab.
               </p>
             </div>
           </div>
@@ -1156,9 +1129,108 @@ function ConfigPage() {
   if (!config) return <p className="p-6 text-red-500">Config file not found</p>
 
   const inputClass = 'w-full px-3 py-2 rounded-lg border bg-transparent'
-  const folderOptions = getFolderOptions()
-  const visibleFamilyGroups = getVisibleFamilyGroups()
+  const activeFamilyGroups = getFamilyGroupsByArchiveState(false)
+  const archivedFamilyGroups = getFamilyGroupsByArchiveState(true)
   const hasFallbackOnlyGpu = Boolean(gpuStatus?.available) && gpuOptions.length === 0
+  const familyCountLabel = (count) => `${count} ${count === 1 ? 'family' : 'families'}`
+
+  const renderFamilySection = (sectionKey, familyGroups, emptyText, archive = false) => (
+    <div className="space-y-3">
+      {familyGroups.length === 0 ? (
+        <div className="card text-sm" style={{ color: 'var(--text-muted)' }}>
+          {emptyText}
+        </div>
+      ) : (
+        familyGroups.map(({ familyKey, familyName, familyEntries }) => {
+          const scopedFamilyKey = getScopedFamilyKey(sectionKey, familyKey)
+          const selectedProfileKey = getSelectedFamilyProfile(scopedFamilyKey, familyEntries)
+          const selectedPair = familyEntries.find(([profileKey]) => profileKey === selectedProfileKey) || familyEntries[0]
+          const [key, model] = selectedPair
+          const profileLabel = getModelProfile(key, model)
+          const modelFilename = getModelFilename(model)
+
+          return (
+            <div key={scopedFamilyKey} className="card">
+              <div className="flex items-center justify-between gap-4">
+                <button
+                  onClick={() => toggleFamily(scopedFamilyKey)}
+                  className="flex-1 flex items-center justify-between text-left"
+                >
+                  <div>
+                    <div className="font-semibold text-lg">{familyName}</div>
+                    <div className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
+                      Selected profile: {key}
+                    </div>
+                    <div className="text-xs uppercase tracking-[0.14em] mt-2" style={{ color: 'var(--text-muted)' }}>
+                      Profile: {profileLabel}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 mt-2">
+                      {archive && modelFilename && (
+                        <span
+                          className="px-2 py-1 rounded-full text-xs border"
+                          style={{ borderColor: 'rgba(239,68,68,0.35)', color: 'rgb(248,113,113)' }}
+                        >
+                          Missing: {modelFilename}
+                        </span>
+                      )}
+                      <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        {familyEntries.length} profile{familyEntries.length === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-xl" style={{ color: 'var(--text-muted)' }}>
+                    {(expandedFamilies[scopedFamilyKey] ?? false) ? '▼' : '▶'}
+                  </span>
+                </button>
+              </div>
+
+              {(expandedFamilies[scopedFamilyKey] ?? false) && (
+                <div className="mt-4 space-y-4 border-t pt-4" style={{ borderColor: 'var(--line-soft)' }}>
+                  <div>
+                    <div className="text-sm font-semibold mb-2">Profiles</div>
+                    <div className="flex flex-wrap gap-2">
+                      {familyEntries.map(([profileKey, profileModel]) => {
+                        const currentProfileLabel = getModelProfile(profileKey, profileModel)
+                        const currentTag = getProfileTag(profileModel)
+                        const active = profileKey === selectedProfileKey
+                        return (
+                          <button
+                            key={profileKey}
+                            onClick={() => selectFamilyProfile(scopedFamilyKey, profileKey)}
+                            className="btn text-sm"
+                            style={{ background: active ? 'var(--line-soft)' : 'transparent' }}
+                          >
+                            <span>{currentProfileLabel}</span>
+                            {currentTag && (
+                              <span
+                                className="ml-2 px-2 py-0.5 rounded-full text-[11px] border"
+                                style={{ borderColor: 'var(--line-soft)', color: 'var(--text-muted)' }}
+                              >
+                                {currentTag}
+                              </span>
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border p-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(255,255,255,0.015)' }}>
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                      Active config key
+                    </div>
+                    <div className="font-mono text-sm mt-1">{key}</div>
+                  </div>
+
+                  {renderModelEditor(key, model)}
+                </div>
+              )}
+            </div>
+          )
+        })
+      )}
+    </div>
+  )
 
   return (
     <div className="p-6">
@@ -1270,78 +1342,6 @@ function ConfigPage() {
     filters:
       stripParams: "temperature, top_p"`}
                 </pre>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {folderModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ background: 'rgba(8, 10, 14, 0.7)' }}
-          onClick={closeFolderModal}
-        >
-          <div
-            className="card w-full max-w-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-4 mb-4">
-              <div>
-                <h3 className="text-xl font-semibold">
-                  {folderModal.mode === 'create' ? 'Create Folder' : 'Manage Folder'}
-                </h3>
-                <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
-                  Visual folders only. They do not affect llama-swap runtime behavior.
-                </p>
-              </div>
-              <button
-                onClick={closeFolderModal}
-                className="px-3 py-2 rounded-lg text-sm"
-                style={{ background: 'var(--line-soft)' }}
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Folder Name</label>
-                <input
-                  type="text"
-                  value={folderNameDraft}
-                  onChange={(e) => setFolderNameDraft(e.target.value)}
-                  className={inputClass}
-                  placeholder="Coding"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">Configs In This Folder</label>
-                <div className="max-h-72 overflow-auto rounded-lg border p-3 space-y-2" style={{ borderColor: 'var(--line-soft)' }}>
-                  {Object.entries(config?.models || {}).map(([modelKey, model]) => (
-                    <label key={modelKey} className="flex items-start gap-3 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(folderSelectionDraft[modelKey])}
-                        onChange={() => toggleFolderSelection(modelKey)}
-                      />
-                      <div>
-                        <div className="font-medium">{modelKey}</div>
-                        <div className="text-sm" style={{ color: 'var(--text-muted)' }}>{model.name || modelKey}</div>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-3">
-                <button onClick={closeFolderModal} className="btn btn-secondary text-sm">
-                  Cancel
-                </button>
-                <button onClick={saveFolderModal} className="btn btn-primary text-sm">
-                  Save Folder
-                </button>
               </div>
             </div>
           </div>
@@ -1560,136 +1560,38 @@ function ConfigPage() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">Models ({Object.keys(config.models || {}).length})</h3>
               <div className="flex items-center gap-2">
-                <button onClick={openCreateFolderModal} className="btn btn-secondary text-sm">+ Create Folder</button>
                 <button onClick={addModel} className="btn btn-primary text-sm">+ Add Model</button>
               </div>
             </div>
 
             <div className="card mb-4">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <div className="text-sm font-semibold">Use-Case Filters</div>
-                  <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                    Folders are now filters only. Models are grouped by family first, with profile tabs inside each family.
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={() => setSelectedFolderFilter('all')}
-                    className="btn text-sm"
-                    style={{ background: selectedFolderFilter === 'all' ? 'var(--line-soft)' : 'transparent' }}
-                  >
-                    All
-                  </button>
-                  {folderOptions.map((folderName) => (
-                    <button
-                      key={folderName}
-                      onClick={() => setSelectedFolderFilter(folderName)}
-                      className="btn text-sm"
-                      style={{ background: selectedFolderFilter === folderName ? 'var(--line-soft)' : 'transparent' }}
-                    >
-                      {folderName}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {selectedFolderFilter !== 'all' && selectedFolderFilter !== 'Ungrouped' && (
-                <div className="flex items-center gap-2 mt-4 pt-4 border-t" style={{ borderColor: 'var(--line-soft)' }}>
-                  <button onClick={() => openManageFolderModal(selectedFolderFilter)} className="btn btn-secondary text-sm">
-                    Manage Folder
-                  </button>
-                  <button onClick={() => removeFolder(selectedFolderFilter)} className="btn text-sm">
-                    Remove Folder
-                  </button>
-                </div>
-              )}
+              <div className="text-sm font-semibold">Model Families</div>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                Families are grouped by the GGUF filename used in each command. Profiles are config entries under that GGUF, with optional use-case tags shown as chips.
+              </p>
             </div>
 
-            <div className="space-y-3">
-              {visibleFamilyGroups.length === 0 ? (
-                <div className="card text-sm" style={{ color: 'var(--text-muted)' }}>
-                  No model configs match the current folder filter.
-                </div>
-              ) : (
-                visibleFamilyGroups.map(({ familyName, familyEntries, folders }) => {
-                  const selectedProfileKey = getSelectedFamilyProfile(familyName, familyEntries)
-                  const selectedPair = familyEntries.find(([profileKey]) => profileKey === selectedProfileKey) || familyEntries[0]
-                  const [key, model] = selectedPair
-                  const profileLabel = getModelProfile(key, model)
+            <div>
+              <div className="mb-3 flex items-center justify-between">
+                <h4 className="text-base font-semibold">Installed</h4>
+                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {familyCountLabel(activeFamilyGroups.length)}
+                </span>
+              </div>
+              {renderFamilySection('active', activeFamilyGroups, 'No installed model configs found.')}
+            </div>
 
-                  return (
-                    <div key={familyName} className="card">
-                      <div className="flex items-center justify-between gap-4">
-                        <button
-                          onClick={() => toggleFamily(familyName)}
-                          className="flex-1 flex items-center justify-between text-left"
-                        >
-                          <div>
-                            <div className="font-semibold text-lg">{key}</div>
-                            <div className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
-                              {model?.name || key}
-                            </div>
-                            <div className="text-xs uppercase tracking-[0.14em] mt-2" style={{ color: 'var(--text-muted)' }}>
-                              Family: {familyName}{profileLabel ? ` • Profile: ${profileLabel}` : ''}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2 mt-2">
-                              {folders.map((folderName) => (
-                                <span
-                                  key={folderName}
-                                  className="px-2 py-1 rounded-full text-xs border"
-                                  style={{ borderColor: 'var(--line-soft)', color: 'var(--text-muted)' }}
-                                >
-                                  {folderName}
-                                </span>
-                              ))}
-                              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                                {familyEntries.length} profile{familyEntries.length === 1 ? '' : 's'}
-                              </span>
-                            </div>
-                          </div>
-                          <span className="text-xl" style={{ color: 'var(--text-muted)' }}>
-                            {(expandedFamilies[familyName] ?? false) ? '▼' : '▶'}
-                          </span>
-                        </button>
-                      </div>
-
-                      {(expandedFamilies[familyName] ?? false) && (
-                        <div className="mt-4 space-y-4 border-t pt-4" style={{ borderColor: 'var(--line-soft)' }}>
-                          <div>
-                            <div className="text-sm font-semibold mb-2">Profiles</div>
-                            <div className="flex flex-wrap gap-2">
-                              {familyEntries.map(([profileKey, profileModel]) => {
-                                const profileLabel = getModelProfile(profileKey, profileModel)
-                                const active = profileKey === selectedProfileKey
-                                return (
-                                  <button
-                                    key={profileKey}
-                                    onClick={() => selectFamilyProfile(familyName, profileKey)}
-                                    className="btn text-sm"
-                                    style={{ background: active ? 'var(--line-soft)' : 'transparent' }}
-                                  >
-                                    {profileLabel}
-                                  </button>
-                                )
-                              })}
-                            </div>
-                          </div>
-
-                          <div className="rounded-lg border p-3" style={{ borderColor: 'var(--line-soft)', background: 'rgba(255,255,255,0.015)' }}>
-                            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                              Active config key
-                            </div>
-                            <div className="font-mono text-sm mt-1">{key}</div>
-                          </div>
-
-                          {renderModelEditor(key, model)}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })
-              )}
+            <div className="mt-6">
+              <button
+                onClick={() => setArchiveOpen(prev => !prev)}
+                className="mb-3 flex w-full items-center justify-between text-left"
+              >
+                <h4 className="text-base font-semibold">Archive</h4>
+                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {familyCountLabel(archivedFamilyGroups.length)} {(archiveOpen ? '▼' : '▶')}
+                </span>
+              </button>
+              {archiveOpen && renderFamilySection('archive', archivedFamilyGroups, 'No archived configs. Archive contains configs whose GGUF file is missing.', true)}
             </div>
           </div>
         </>
