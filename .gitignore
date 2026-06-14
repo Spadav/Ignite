@@ -1,0 +1,37 @@
+# Local llama.cpp checkouts and build outputs
+llama-backends/*
+!llama-backends/.gitkeep
+
+# Large model assets
+models/*
+!models/.gitkeep
+!models/mmproj/
+models/mmproj/*
+!models/mmproj/.gitkeep
+*.gguf
+*.gguf.part
+
+# Runtime state
+ignite.yaml
+*.local.yaml
+IGNITE-V1-CONFIG.yaml
+IGNITE_V2_SPEC.md
+ignite-v1-capabilities-map.md
+README(*).md
+logs/*
+!logs/.gitkeep
+state/*
+!state/.gitkeep
+backups/*
+!backups/.gitkeep
+
+# Build artifacts
+ignite
+dist/
+web/dist/
+web/node_modules/
+web/tsconfig.tsbuildinfo
+
+# OS/editor noise
+.DS_Store
+*.log

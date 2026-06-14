@@ -1,0 +1,48 @@
+listen: "127.0.0.1:8091"
+logLevel: info
+
+backends:
+  mainline:
+    path: ./llama-backends/mainline
+    binary: build-ignite/bin/llama-server
+    buildDir: build-ignite
+    cudaCompiler: ""
+    cudaToolkitRoot: ""
+    cudaArchitectures: []
+    repo: https://github.com/ggml-org/llama.cpp
+    buildCmd: ""
+
+activeBackend: mainline
+
+modelsPath: ./models
+mmprojectsPath: ./models/mmproj
+
+gpus:
+  []
+
+ttl:
+  global: 600
+
+healthCheck:
+  model: ""
+  timeout: 120
+
+auth:
+  enabled: false
+  apiKeys: []
+
+timbre:
+  enabled: false
+  endpoint: http://localhost:5100
+
+startPort: 5800
+
+downloads:
+  directory: ./models
+  concurrent: 2
+
+models:
+  {}
+
+groups:
+  {}
