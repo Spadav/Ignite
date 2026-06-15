@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Listen         string                 `yaml:"listen" json:"listen"`
 	LogLevel       string                 `yaml:"logLevel" json:"logLevel"`
+	LogsPath       string                 `yaml:"logsPath" json:"logsPath"`
 	Backends       map[string]Backend     `yaml:"backends" json:"backends"`
 	ActiveBackend  string                 `yaml:"activeBackend" json:"activeBackend"`
 	ModelsPath     string                 `yaml:"modelsPath" json:"modelsPath"`
@@ -123,6 +124,7 @@ func Default(path string) *Config {
 		Path:           path,
 		Listen:         "127.0.0.1:8091",
 		LogLevel:       "info",
+		LogsPath:       "./logs",
 		ActiveBackend:  "mainline",
 		ModelsPath:     "./models",
 		MMProjectsPath: "./models/mmproj",
@@ -209,7 +211,7 @@ func (c *Config) ensureLocalDirs() error {
 		c.ModelsPath,
 		c.MMProjectsPath,
 		filepath.Join(base, "llama-backends"),
-		filepath.Join(base, "logs"),
+		c.LogsPath,
 		filepath.Join(base, "state"),
 		filepath.Join(base, "backups"),
 	} {
@@ -265,6 +267,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
+	}
+	if c.LogsPath == "" && c.Path != "" {
+		c.LogsPath = filepath.Join(filepath.Dir(c.Path), "logs")
 	}
 	if c.StartPort == 0 {
 		c.StartPort = 5800

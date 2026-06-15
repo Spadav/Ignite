@@ -77,6 +77,7 @@ type updateInfo struct {
 	CurrentVersion string `json:"currentVersion"`
 	LatestVersion  string `json:"latestVersion,omitempty"`
 	ReleaseURL     string `json:"releaseUrl,omitempty"`
+	Prerelease     bool   `json:"prerelease,omitempty"`
 	CheckedAt      string `json:"checkedAt,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
@@ -96,7 +97,7 @@ func (h *Handlers) checkIgniteUpdate(ctx context.Context) updateInfo {
 	h.updateMu.Unlock()
 
 	info := updateInfo{Configured: true, CurrentVersion: current}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+version.Repo+"/releases/latest", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+version.Repo+"/releases?per_page=10", nil)
 	if err != nil {
 		info.Error = err.Error()
 		return h.storeUpdateInfo(info)
@@ -119,17 +120,38 @@ func (h *Handlers) checkIgniteUpdate(ctx context.Context) updateInfo {
 		info.Error = resp.Status
 		return h.storeUpdateInfo(info)
 	}
-	var release struct {
-		TagName string `json:"tag_name"`
-		HTMLURL string `json:"html_url"`
+	var releases []struct {
+		TagName    string `json:"tag_name"`
+		HTMLURL    string `json:"html_url"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
 		info.Error = err.Error()
+		return h.storeUpdateInfo(info)
+	}
+	var release struct {
+		TagName    string
+		HTMLURL    string
+		Prerelease bool
+	}
+	for _, item := range releases {
+		if item.Draft || item.TagName == "" {
+			continue
+		}
+		release.TagName = item.TagName
+		release.HTMLURL = item.HTMLURL
+		release.Prerelease = item.Prerelease
+		break
+	}
+	if release.TagName == "" {
+		info.Error = "no published releases found"
 		return h.storeUpdateInfo(info)
 	}
 	latest := strings.TrimPrefix(release.TagName, "v")
 	info.LatestVersion = latest
 	info.ReleaseURL = release.HTMLURL
+	info.Prerelease = release.Prerelease
 	info.Available = compareVersions(latest, current) > 0
 	return h.storeUpdateInfo(info)
 }
@@ -684,8 +706,10 @@ func igniteReleasesURL() string {
 }
 
 func compareVersions(a, b string) int {
-	ap := versionParts(a)
-	bp := versionParts(b)
+	coreA, preA := splitVersion(a)
+	coreB, preB := splitVersion(b)
+	ap := versionParts(coreA)
+	bp := versionParts(coreB)
 	for i := 0; i < len(ap) || i < len(bp); i++ {
 		av, bv := 0, 0
 		if i < len(ap) {
@@ -699,6 +723,61 @@ func compareVersions(a, b string) int {
 		}
 		if av < bv {
 			return -1
+		}
+	}
+	if preA == preB {
+		return 0
+	}
+	if preA == "" {
+		return 1
+	}
+	if preB == "" {
+		return -1
+	}
+	return comparePrerelease(preA, preB)
+}
+
+func splitVersion(value string) (string, string) {
+	value = strings.TrimPrefix(value, "v")
+	value = strings.SplitN(value, "+", 2)[0]
+	parts := strings.SplitN(value, "-", 2)
+	if len(parts) == 1 {
+		return parts[0], ""
+	}
+	return parts[0], parts[1]
+}
+
+func comparePrerelease(a, b string) int {
+	ap := strings.Split(a, ".")
+	bp := strings.Split(b, ".")
+	for i := 0; i < len(ap) || i < len(bp); i++ {
+		if i >= len(ap) {
+			return -1
+		}
+		if i >= len(bp) {
+			return 1
+		}
+		ai, aErr := strconv.Atoi(ap[i])
+		bi, bErr := strconv.Atoi(bp[i])
+		switch {
+		case aErr == nil && bErr == nil:
+			if ai > bi {
+				return 1
+			}
+			if ai < bi {
+				return -1
+			}
+		case aErr == nil:
+			return -1
+		case bErr == nil:
+			return 1
+		default:
+			if ap[i] > bp[i] {
+				return 1
+			}
+			if ap[i] < bp[i] {
+				return -1
+			}
 		}
 	}
 	return 0
@@ -1069,7 +1148,7 @@ func removeString(items []string, value string) []string {
 }
 
 func (h *Handlers) Logs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, h.logs.Recent())
+	writeJSON(w, http.StatusOK, h.logs.Bundle())
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

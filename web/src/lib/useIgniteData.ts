@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, AboutInfo, BackendJob, BackendPlan, Diagnostic, DownloadJob, EngineInfo, GpuInfo, IgniteConfig, ModelFile, ModelInfo, OnboardingState, Status, TrafficCapture } from "./api";
+import { api, AboutInfo, BackendJob, BackendPlan, Diagnostic, DownloadJob, EngineInfo, GpuInfo, IgniteConfig, LogBundle, ModelFile, ModelInfo, OnboardingState, Status, TrafficCapture } from "./api";
 
 export type IgniteData = {
   status?: Status;
@@ -15,6 +15,7 @@ export type IgniteData = {
   backendJobs: BackendJob[];
   onboarding?: OnboardingState;
   traffic: TrafficCapture[];
+  logBundle?: LogBundle;
   logs: { time: string; level: string; message: string }[];
   loading: boolean;
   error?: string;
@@ -35,6 +36,7 @@ export function useIgniteData(): IgniteData {
   const [backendJobs, setBackendJobs] = useState<BackendJob[]>([]);
   const [onboarding, setOnboarding] = useState<OnboardingState>();
   const [traffic, setTraffic] = useState<TrafficCapture[]>([]);
+  const [logBundle, setLogBundle] = useState<LogBundle>();
   const [logs, setLogs] = useState<{ time: string; level: string; message: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
@@ -69,7 +71,8 @@ export function useIgniteData(): IgniteData {
       setBackendPlans(nextBackends.plans || {});
       setEngines(nextBackends.engines || {});
       setBackendJobs(sortBackendJobs(nextJobs));
-      setLogs(nextLogs.slice(-160).reverse());
+      setLogBundle(nextLogs);
+      setLogs(parseIgniteLogEntries(nextLogs.ignite.lines).slice(-160).reverse());
       setOnboarding(nextOnboarding);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to reach Ignite");
@@ -85,9 +88,17 @@ export function useIgniteData(): IgniteData {
   }, [refresh]);
 
   return useMemo(
-    () => ({ status, about, gpus, models, modelFiles, downloads, config, diagnostics, backendPlans, engines, backendJobs, onboarding, traffic, logs, loading, error, refresh }),
-    [status, about, gpus, models, modelFiles, downloads, config, diagnostics, backendPlans, engines, backendJobs, onboarding, traffic, logs, loading, error, refresh]
+    () => ({ status, about, gpus, models, modelFiles, downloads, config, diagnostics, backendPlans, engines, backendJobs, onboarding, traffic, logBundle, logs, loading, error, refresh }),
+    [status, about, gpus, models, modelFiles, downloads, config, diagnostics, backendPlans, engines, backendJobs, onboarding, traffic, logBundle, logs, loading, error, refresh]
   );
+}
+
+function parseIgniteLogEntries(lines: string[]) {
+  return lines.map((line) => {
+    const match = line.match(/^(\S+)\s+\[(\w+)\]\s+(.*)$/);
+    if (!match) return { time: new Date().toISOString(), level: "info", message: line };
+    return { time: match[1], level: match[2], message: match[3] };
+  });
 }
 
 function sortGpus(gpus: GpuInfo[]) {

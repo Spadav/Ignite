@@ -140,6 +140,18 @@ export type OnboardingState = {
   doneAt?: string;
 };
 
+export type LogFile = {
+  name: string;
+  path: string;
+  lines: string[];
+};
+
+export type LogBundle = {
+  directory: string;
+  ignite: LogFile;
+  models: LogFile[];
+};
+
 export type AboutInfo = {
   name: string;
   version: string;
@@ -158,6 +170,7 @@ export type AboutInfo = {
     currentVersion: string;
     latestVersion?: string;
     releaseUrl?: string;
+    prerelease?: boolean;
     checkedAt?: string;
     error?: string;
   };
@@ -166,6 +179,7 @@ export type AboutInfo = {
 export type IgniteConfig = {
   listen: string;
   logLevel: string;
+  logsPath: string;
   backends: Record<string, unknown>;
   activeBackend: string;
   modelsPath: string;
@@ -211,7 +225,7 @@ export const api = {
   backendJobs: () => request<BackendJob[]>("/api/backend-jobs"),
   onboarding: () => request<OnboardingState>("/api/onboarding"),
   completeOnboarding: () => request<OnboardingState>("/api/onboarding/complete", { method: "POST" }),
-  logs: () => request<{ time: string; level: string; message: string }[]>("/api/logs"),
+  logs: () => request<LogBundle>("/api/logs"),
   loadModel: (id: string) => request<LoadedModel>(`/api/models/${encodeURIComponent(id)}/load`, { method: "POST" }),
   unloadModel: (id: string) => request<{ status: string }>(`/api/models/${encodeURIComponent(id)}/unload`, { method: "POST" }),
   updateConfig: (config: IgniteConfig) => request<{ status: string; config: IgniteConfig }>("/api/config", {

@@ -42,7 +42,10 @@ func main() {
 		cfg.Listen = "127.0.0.1:8091"
 	}
 
-	logs := logger.New()
+	logs, err := logger.New(cfg.LogsPath)
+	if err != nil {
+		log.Fatalf("init logger: %v", err)
+	}
 	state := igniteruntime.NewState(cfg)
 	manager := process.NewManager(state, logs)
 	backendJobs := backend.NewJobManager(state, logs)

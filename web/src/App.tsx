@@ -30,13 +30,14 @@ import logo from "./assets/ignite-logo.jpeg";
 import { api, HFModelFile, HFModelResult, IgniteConfig, ModelInfo, TrafficCapture } from "./lib/api";
 import { IgniteData, useIgniteData } from "./lib/useIgniteData";
 
-type View = "dashboard" | "models" | "config" | "runtime" | "engines" | "playground" | "settings";
+type View = "dashboard" | "models" | "config" | "runtime" | "logs" | "engines" | "playground" | "settings";
 
 const navItems: { id: View; label: string; icon: React.ElementType }[] = [
   { id: "dashboard", label: "Dashboard", icon: Home },
   { id: "models", label: "Models", icon: HardDriveDownload },
   { id: "config", label: "Config", icon: Boxes },
   { id: "runtime", label: "Runtime", icon: Activity },
+  { id: "logs", label: "Logs", icon: ScrollText },
   { id: "engines", label: "Engines", icon: ServerCog },
   { id: "playground", label: "Playground", icon: Terminal }
 ];
@@ -63,6 +64,7 @@ export function App() {
         {view === "engines" && <Engines data={data} />}
         {view === "playground" && <Playground data={data} />}
         {view === "runtime" && <Runtime data={data} />}
+        {view === "logs" && <LogsView data={data} />}
         {view === "settings" && <SettingsView data={data} />}
       </main>
     </div>
@@ -178,6 +180,14 @@ function Setup({ data, onFinish }: { data: IgniteData; onFinish: () => void | Pr
     void onFinish();
   };
 
+  const skipEngineSetup = () => {
+    if (hasModels) {
+      void onFinish();
+      return;
+    }
+    setStep(2);
+  };
+
   return (
     <div className="setup-screen">
       <section className="setup-panel">
@@ -276,6 +286,7 @@ function Setup({ data, onFinish }: { data: IgniteData; onFinish: () => void | Pr
         )}
         <footer className="setup-actions">
           <span>{step + 1} / {steps.length}</span>
+          {step === 1 && !engine?.ready ? <button className="secondary-btn" disabled={engineBusy} onClick={skipEngineSetup}>Skip for now</button> : null}
           {step === 2 && !hasModels ? <button className="secondary-btn" onClick={() => void onFinish()}>Skip</button> : null}
           <button className="primary-btn" disabled={(step === 1 && !engine?.ready) || (step === 2 && !hasModels)} onClick={continueSetup}>Continue</button>
         </footer>
@@ -853,6 +864,59 @@ function RuntimeDetail({
   );
 }
 
+function LogsView({ data }: { data: IgniteData }) {
+  const bundle = data.logBundle;
+  const [selectedModel, setSelectedModel] = useState("");
+  const modelLogs = bundle?.models || [];
+  const activeModelLog = modelLogs.find((log) => log.name === selectedModel) || modelLogs[0];
+  useEffect(() => {
+    if (!selectedModel && modelLogs[0]) setSelectedModel(modelLogs[0].name);
+    if (selectedModel && modelLogs.length > 0 && !modelLogs.some((log) => log.name === selectedModel)) {
+      setSelectedModel(modelLogs[0].name);
+    }
+  }, [modelLogs, selectedModel]);
+
+  return (
+    <section className="view">
+      <PageHeader title="Logs" detail={bundle?.directory || data.config?.logsPath || ""} />
+      <div className="logs-layout">
+        <div className="panel log-panel">
+          <div className="panel-head">
+            <div>
+              <b>Ignite</b>
+              <small>{bundle?.ignite.path || "No log file yet"}</small>
+            </div>
+          </div>
+          <LogLines lines={bundle?.ignite.lines || []} empty="No Ignite logs yet." />
+        </div>
+        <div className="panel log-panel">
+          <div className="panel-head">
+            <div>
+              <b>llama.cpp</b>
+              <small>{activeModelLog?.path || "No model log file yet"}</small>
+            </div>
+            {modelLogs.length > 0 ? (
+              <select value={activeModelLog?.name || ""} onChange={(event) => setSelectedModel(event.target.value)}>
+                {modelLogs.map((log) => <option key={log.name} value={log.name}>{log.name}</option>)}
+              </select>
+            ) : null}
+          </div>
+          <LogLines lines={activeModelLog?.lines || []} empty="No llama.cpp logs yet. Load a model to start capturing stdout/stderr." />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function LogLines({ lines, empty }: { lines: string[]; empty: string }) {
+  const tail = lines.slice(-220).reverse();
+  return (
+    <pre className="log-lines">
+      {tail.length > 0 ? tail.join("\n") : empty}
+    </pre>
+  );
+}
+
 function Playground({ data }: { data: IgniteData }) {
   const [modelId, setModelId] = useState(data.models[0]?.id || "");
   const [endpoint, setEndpoint] = useState<"chat" | "completion" | "embedding">("chat");
@@ -1043,7 +1107,7 @@ function SettingsView({ data }: { data: IgniteData }) {
       {data.about?.update.available ? (
         <div className="update-banner">
           <div>
-            <b>Ignite v{data.about.update.latestVersion} available</b>
+            <b>Ignite v{data.about.update.latestVersion} {data.about.update.prerelease ? "beta " : ""}available</b>
             <span>You are running v{data.about.update.currentVersion}. Update when you are ready.</span>
           </div>
           {data.about.update.releaseUrl ? <a className="secondary-btn" href={data.about.update.releaseUrl} target="_blank" rel="noreferrer">Release <ExternalLink size={14} /></a> : null}
@@ -1053,6 +1117,7 @@ function SettingsView({ data }: { data: IgniteData }) {
         <div className="panel form-panel">
           <div className="panel-head"><b>Runtime</b><button className="primary-btn" disabled={saving || !draft} onClick={save}>{saving ? "Saving" : "Save"}</button></div>
           <Field label="Listen address" value={draft?.listen || ""} onChange={(value) => update({ listen: value })} />
+          <Field label="Logs path" value={draft?.logsPath || ""} onChange={(value) => update({ logsPath: value })} />
           <Field label="Models path" value={draft?.modelsPath || ""} onChange={(value) => update({ modelsPath: value, downloads: { ...(draft?.downloads || { concurrent: 2, directory: value }), directory: value } })} />
           <Field label="Projectors path" value={draft?.mmprojectsPath || ""} onChange={(value) => update({ mmprojectsPath: value })} />
           <Field label="Start port" value={String(draft?.startPort || 5800)} onChange={(value) => update({ startPort: Number(value) || 5800 })} />
@@ -1167,7 +1232,7 @@ function Progress({ label, value, detail }: { label: string; value: number; deta
 }
 
 function updateStatusText(update: NonNullable<IgniteData["about"]>["update"]) {
-  if (update.available) return `v${update.latestVersion} is available.`;
+  if (update.available) return `v${update.latestVersion}${update.prerelease ? " beta" : ""} is available.`;
   if (update.error) return `Update check failed: ${update.error}`;
   if (update.checkedAt) return "Ignite is up to date.";
   return "Update check pending.";
@@ -1365,7 +1430,7 @@ function ConnectPanel({ endpoint }: { endpoint: string }) {
         <b>OpenAI-compatible</b>
         <span>Point any client at the endpoint.</span>
         <pre>{`curl localhost:${endpoint.split(":").pop()}/v1/chat/completions \\
-  -d '{"model":"qwen-hermes","messages":[...]}'`}</pre>
+  -d '{"model":"model-name","messages":[...]}'`}</pre>
       </div>
     </div>
   );

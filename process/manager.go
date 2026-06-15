@@ -30,6 +30,7 @@ type Manager struct {
 	mu        sync.Mutex
 	loaded    map[string]*trackedProcess
 	usedPorts map[int]bool
+	loadLocks map[string]*sync.Mutex
 	nextPort  int
 }
 
@@ -40,6 +41,7 @@ func NewManager(state *igniteruntime.State, logs *logger.Logger) *Manager {
 		logs:      logs,
 		loaded:    make(map[string]*trackedProcess),
 		usedPorts: make(map[int]bool),
+		loadLocks: make(map[string]*sync.Mutex),
 		nextPort:  cfg.StartPort,
 	}
 }
@@ -76,6 +78,10 @@ func (m *Manager) Touch(modelID string) {
 }
 
 func (m *Manager) EnsureLoaded(ctx context.Context, modelID string) (LoadedModel, error) {
+	lock := m.loadLock(modelID)
+	lock.Lock()
+	defer lock.Unlock()
+
 	if state, ok := m.Get(modelID); ok && state.Status == StatusRunning {
 		m.Touch(modelID)
 		return state, nil
@@ -155,6 +161,18 @@ func (m *Manager) EnsureLoaded(ctx context.Context, modelID string) (LoadedModel
 
 	m.logs.Infof("model %s loaded on port %d pid %d", modelID, state.Port, state.PID)
 	return state, nil
+}
+
+func (m *Manager) loadLock(modelID string) *sync.Mutex {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	lock, ok := m.loadLocks[modelID]
+	if !ok {
+		lock = &sync.Mutex{}
+		m.loadLocks[modelID] = lock
+	}
+	return lock
 }
 
 func (m *Manager) Unload(ctx context.Context, modelID string) error {
@@ -294,7 +312,7 @@ func (m *Manager) markError(modelID string, err error) {
 func (m *Manager) scanOutput(modelID, stream string, pipe interface{ Read([]byte) (int, error) }) {
 	scanner := bufio.NewScanner(pipe)
 	for scanner.Scan() {
-		m.logs.Infof("llama-server[%s] %s: %s", modelID, stream, scanner.Text())
+		m.logs.ModelLine(modelID, stream, scanner.Text())
 	}
 }
 

@@ -1385,6 +1385,48 @@ code {
   align-items: start;
 }
 
+.logs-layout {
+  display: grid;
+  gap: 14px;
+}
+
+.log-panel {
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.log-panel .panel-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.log-panel .panel-head small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-panel select {
+  max-width: 260px;
+}
+
+.log-lines {
+  min-height: 280px;
+  max-height: 520px;
+  overflow: auto;
+  border: 1px solid #272421;
+  border-radius: 8px;
+  background: #090807;
+  color: #cfc7bd;
+  padding: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .playground-form {
   display: grid;
   gap: 13px;
@@ -1658,7 +1700,7 @@ code {
   }
   .nav-list {
     margin-top: 0;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(7, minmax(0, 1fr));
     gap: 6px;
   }
   .nav-item {
@@ -1717,6 +1759,14 @@ code {
     font-size: 9px;
   }
   .playground-response { position: static; }
+  .log-panel .panel-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .log-panel select {
+    max-width: none;
+    width: 100%;
+  }
   .playground-response pre { min-height: 260px; max-height: none; }
   .table-row, .diagnostics .table-row, .runtime-detail { grid-template-columns: 1fr; }
   .runtime-table {

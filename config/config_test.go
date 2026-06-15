@@ -58,6 +58,9 @@ func TestExampleYAMLLoads(t *testing.T) {
 	if cfg.ModelsPath != "./models" {
 		t.Fatalf("unexpected modelsPath: %s", cfg.ModelsPath)
 	}
+	if cfg.LogsPath != "./logs" {
+		t.Fatalf("unexpected logsPath: %s", cfg.LogsPath)
+	}
 	if len(cfg.Models) != 0 {
 		t.Fatalf("expected no example models, got %d", len(cfg.Models))
 	}
