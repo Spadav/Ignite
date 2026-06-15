@@ -79,6 +79,7 @@ func main() {
 	mux.HandleFunc("GET /api/downloads", apiHandlers.Downloads)
 	mux.HandleFunc("POST /api/downloads", apiHandlers.StartDownload)
 	mux.HandleFunc("DELETE /api/downloads/{id}", apiHandlers.CancelDownload)
+	mux.HandleFunc("PUT /api/groups", apiHandlers.UpdateGroups)
 	mux.HandleFunc("POST /api/models", apiHandlers.CreateModelConfig)
 	mux.HandleFunc("POST /api/models/{id}/load", apiHandlers.LoadModel)
 	mux.HandleFunc("POST /api/models/{id}/unload", apiHandlers.UnloadModel)

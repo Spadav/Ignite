@@ -840,6 +840,30 @@ type duplicateModelRequest struct {
 	ID string `json:"id"`
 }
 
+func (h *Handlers) UpdateGroups(w http.ResponseWriter, r *http.Request) {
+	var groups map[string]config.ModelGroup
+	if err := readJSON(r, &groups); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if groups == nil {
+		groups = map[string]config.ModelGroup{}
+	}
+
+	cfg, err := h.mutateConfig(func(cfg *config.Config) error {
+		cfg.Groups = normalizeGroups(groups)
+		return nil
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "saved",
+		"groups": cfg.Groups,
+	})
+}
+
 func (h *Handlers) CreateModelConfig(w http.ResponseWriter, r *http.Request) {
 	var req modelUpsertRequest
 	if err := readJSON(r, &req); err != nil {
@@ -875,8 +899,8 @@ func (h *Handlers) CreateModelConfig(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) UpdateModelConfig(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var model config.Model
-	if err := readJSON(r, &model); err != nil {
+	req, err := readModelUpsertRequest(r)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -885,7 +909,8 @@ func (h *Handlers) UpdateModelConfig(w http.ResponseWriter, r *http.Request) {
 		if _, exists := cfg.Models[id]; !exists {
 			return errHTTP("model not found")
 		}
-		cfg.Models[id] = model
+		cfg.Models[id] = req.Model
+		assignModelToGroup(cfg.Groups, id, req.Group)
 		return nil
 	})
 	if err != nil {
@@ -1124,6 +1149,26 @@ func readJSON(r *http.Request, dst any) error {
 	return json.NewDecoder(r.Body).Decode(dst)
 }
 
+func readModelUpsertRequest(r *http.Request) (modelUpsertRequest, error) {
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return modelUpsertRequest{}, err
+	}
+	var wrapped modelUpsertRequest
+	if err := json.Unmarshal(body, &wrapped); err != nil {
+		return modelUpsertRequest{}, err
+	}
+	if wrapped.Model.File != "" || wrapped.Model.Args != "" || wrapped.Model.GPU != "" {
+		return wrapped, nil
+	}
+	var model config.Model
+	if err := json.Unmarshal(body, &model); err != nil {
+		return modelUpsertRequest{}, err
+	}
+	return modelUpsertRequest{Model: model}, nil
+}
+
 func errHTTP(message string) error {
 	return errors.New(message)
 }
@@ -1143,6 +1188,50 @@ func removeString(items []string, value string) []string {
 		if item != value {
 			out = append(out, item)
 		}
+	}
+	return out
+}
+
+func normalizeGroups(groups map[string]config.ModelGroup) map[string]config.ModelGroup {
+	out := make(map[string]config.ModelGroup, len(groups))
+	assigned := map[string]bool{}
+	keys := make([]string, 0, len(groups))
+	for name := range groups {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	for _, name := range keys {
+		group := groups[name]
+		group.Members = uniqueUnassigned(group.Members, assigned)
+		out[name] = group
+	}
+	return out
+}
+
+func assignModelToGroup(groups map[string]config.ModelGroup, modelID, groupID string) {
+	for name, group := range groups {
+		group.Members = removeString(group.Members, modelID)
+		groups[name] = group
+	}
+	if groupID == "" {
+		return
+	}
+	group := groups[groupID]
+	group.Members = appendUnique(group.Members, modelID)
+	if !group.Swap {
+		group.Swap = true
+	}
+	groups[groupID] = group
+}
+
+func uniqueUnassigned(items []string, assigned map[string]bool) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if item == "" || assigned[item] {
+			continue
+		}
+		assigned[item] = true
+		out = append(out, item)
 	}
 	return out
 }

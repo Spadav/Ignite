@@ -142,6 +142,11 @@ button { cursor: pointer; }
   margin-bottom: 20px;
 }
 
+.page-head.with-action {
+  justify-content: space-between;
+  height: auto;
+}
+
 .page-head h1 {
   font-size: 21px;
   line-height: 1.1;

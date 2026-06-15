@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import logo from "./assets/ignite-logo.jpeg";
-import { api, HFModelFile, HFModelResult, IgniteConfig, ModelInfo, TrafficCapture } from "./lib/api";
+import { api, HFModelFile, HFModelResult, IgniteConfig, ModelFile, ModelInfo, TrafficCapture } from "./lib/api";
 import { IgniteData, useIgniteData } from "./lib/useIgniteData";
 
 type View = "dashboard" | "models" | "config" | "runtime" | "logs" | "engines" | "playground" | "settings";
@@ -325,6 +325,8 @@ function Dashboard({ data }: { data: IgniteData }) {
 function Models({ data }: { data: IgniteData }) {
   const [selectedId, setSelectedId] = useState<string | undefined>(data.models[0]?.id);
   const [editingId, setEditingId] = useState<string>();
+  const [draftModel, setDraftModel] = useState<ModelInfo>();
+  const [createError, setCreateError] = useState("");
   useEffect(() => {
     if ((!selectedId || !data.models.some((model) => model.id === selectedId)) && data.models[0]) {
       setSelectedId(data.models[0].id);
@@ -332,9 +334,31 @@ function Models({ data }: { data: IgniteData }) {
   }, [data.models, selectedId]);
   const grouped = groupBy(data.models, (model) => model.family || "Other");
   const editing = data.models.find((model) => model.id === editingId);
+  const addConfig = () => {
+    setCreateError("");
+    setDraftModel(createDraftModel(data));
+  };
+  const deleteConfig = async (model: ModelInfo) => {
+    if (!window.confirm(`Delete config "${model.id}"? The GGUF file stays on disk.`)) return;
+    setCreateError("");
+    try {
+      await api.deleteModel(model.id);
+      await data.refresh();
+      if (selectedId === model.id) setSelectedId(undefined);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "Failed to delete model config.");
+    }
+  };
   return (
     <section className="view">
-      <PageHeader title="Config" detail={`${data.models.length} model profiles`} />
+      <header className="page-head with-action">
+        <div>
+          <h1>Config</h1>
+          <span>{data.models.length} model profiles</span>
+        </div>
+        <button className="primary-btn" onClick={() => void addConfig()}>Add config</button>
+      </header>
+      {createError ? <div className="inline-error">{createError}</div> : null}
       <RuntimeGroupsManager data={data} />
       <div className="model-groups">
         {sortedEntries(grouped).map(([family, models]) => (
@@ -352,6 +376,7 @@ function Models({ data }: { data: IgniteData }) {
                     setSelectedId(model.id);
                     setEditingId(model.id);
                   }}
+                  onDelete={() => void deleteConfig(model)}
                 />
               ))}
             </div>
@@ -359,6 +384,16 @@ function Models({ data }: { data: IgniteData }) {
         ))}
       </div>
       <ModelConfigModal model={editing} data={data} onClose={() => setEditingId(undefined)} />
+      <ModelConfigModal
+        model={draftModel}
+        data={data}
+        creating
+        onClose={() => setDraftModel(undefined)}
+        onCreated={(id) => {
+          setSelectedId(id);
+          setEditingId(id);
+        }}
+      />
     </section>
   );
 }
@@ -375,6 +410,8 @@ function ModelLibrary({ data }: { data: IgniteData }) {
   const [repoLoading, setRepoLoading] = useState(false);
   const [repoError, setRepoError] = useState("");
   const [deleteError, setDeleteError] = useState("");
+  const [addError, setAddError] = useState("");
+  const [draftModel, setDraftModel] = useState<ModelInfo>();
   const gpuKey = data.gpus.map((gpu) => `${gpu.id}:${gpu.vram}`).join("|");
 
   useEffect(() => {
@@ -451,6 +488,10 @@ function ModelLibrary({ data }: { data: IgniteData }) {
       setDeleteError(err instanceof Error ? err.message : "Unable to delete model file.");
     }
   };
+  const addFileConfig = (file: ModelFile) => {
+    setAddError("");
+    setDraftModel(createDraftModel(data, file));
+  };
   return (
     <section className="view">
       <PageHeader title="Models" detail={data.config?.modelsPath || ""} />
@@ -519,6 +560,7 @@ function ModelLibrary({ data }: { data: IgniteData }) {
         <Metric label="Ready to add" value={String(looseFiles)} compact />
       </div>
       {deleteError ? <div className="inline-error">{deleteError}</div> : null}
+      {addError ? <div className="inline-error">{addError}</div> : null}
       <div className="model-file-list">
         <div className="model-file-row header"><span className="file-cell">file</span><span className="size-cell">size</span><span className="config-cell">config</span><span className="actions-cell">actions</span></div>
         {data.modelFiles.length === 0 ? (
@@ -539,12 +581,19 @@ function ModelLibrary({ data }: { data: IgniteData }) {
                 : <span>not configured</span>}
             </div>
             <div className="row-actions actions-cell">
-              <button className="secondary-btn" disabled title="Preset add-to-config is the next step">Add</button>
+              <button className="secondary-btn" onClick={() => addFileConfig(file)}>Add</button>
               <button className="secondary-btn danger-btn" onClick={() => void deleteFile(file)}>Delete</button>
             </div>
           </div>
         ))}
       </div>
+      <ModelConfigModal
+        model={draftModel}
+        data={data}
+        creating
+        onClose={() => setDraftModel(undefined)}
+        onCreated={() => void data.refresh()}
+      />
     </section>
   );
 }
@@ -582,6 +631,7 @@ function RuntimeGroupsManager({ data }: { data: IgniteData }) {
   const [helpOpen, setHelpOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const groups = data.config?.groups || {};
   const groupEntries = sortedEntries(groups);
   const memberCount = groupEntries.reduce((sum, [, group]) => sum + group.members.length, 0);
@@ -589,9 +639,12 @@ function RuntimeGroupsManager({ data }: { data: IgniteData }) {
   const saveGroups = async (nextGroups: IgniteConfig["groups"]) => {
     if (!data.config) return;
     setSaving(true);
+    setError("");
     try {
-      await api.updateConfig({ ...data.config, groups: nextGroups });
+      await api.updateGroups(nextGroups);
       await data.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save runtime groups.");
     } finally {
       setSaving(false);
     }
@@ -648,6 +701,7 @@ function RuntimeGroupsManager({ data }: { data: IgniteData }) {
         </div>
       </div>
       {helpOpen ? <RuntimeGroupsHelpModal onClose={() => setHelpOpen(false)} /> : null}
+      {error ? <div className="inline-error">{error}</div> : null}
 
       {open ? (
         <>
@@ -1238,7 +1292,7 @@ function updateStatusText(update: NonNullable<IgniteData["about"]>["update"]) {
   return "Update check pending.";
 }
 
-function ModelCard({ model, data, selected, onSelect, onEdit }: { model: ModelInfo; data: IgniteData; selected: boolean; onSelect: () => void; onEdit: () => void }) {
+function ModelCard({ model, data, selected, onSelect, onEdit, onDelete }: { model: ModelInfo; data: IgniteData; selected: boolean; onSelect: () => void; onEdit: () => void; onDelete: () => void }) {
   const running = model.status === "running";
   return (
     <div className={selected ? "model-card selected" : "model-card"} onClick={onSelect}>
@@ -1248,13 +1302,14 @@ function ModelCard({ model, data, selected, onSelect, onEdit }: { model: ModelIn
       <div className="tag-row">{model.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
       <div className="row-actions" onClick={(event) => event.stopPropagation()}>
         <ActionButton icon={Settings} label="Edit" onClick={onEdit} />
+        <ActionButton icon={X} label="Delete" onClick={onDelete} />
         {running ? <ActionButton icon={Power} label="Unload" onClick={() => void api.unloadModel(model.id).then(data.refresh)} /> : <ActionButton icon={Play} label="Load" onClick={() => void api.loadModel(model.id).then(data.refresh)} />}
       </div>
     </div>
   );
 }
 
-function ModelConfigModal({ model, data, onClose }: { model?: ModelInfo; data: IgniteData; onClose: () => void }) {
+function ModelConfigModal({ model, data, creating = false, onClose, onCreated }: { model?: ModelInfo; data: IgniteData; creating?: boolean; onClose: () => void; onCreated?: (id: string) => void }) {
   const [draft, setDraft] = useState<ModelInfo | undefined>(model);
   const [runtimeGroup, setRuntimeGroup] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1278,27 +1333,42 @@ function ModelConfigModal({ model, data, onClose }: { model?: ModelInfo; data: I
       setError("Model ID is required.");
       return;
     }
-    if (nextId !== model.id && data.config.models[nextId]) {
+    if ((creating || nextId !== model.id) && data.config.models[nextId]) {
       setError(`Model ID "${nextId}" already exists.`);
+      return;
+    }
+    if (!draft.file) {
+      setError("Choose a GGUF file.");
+      return;
+    }
+    if (!draft.gpu) {
+      setError("Choose a GPU.");
       return;
     }
     setSaving(true);
     setError("");
     try {
       const { id: _id, status: _status, ...payload } = draft;
-      const models = { ...data.config.models };
-      delete models[model.id];
-      models[nextId] = payload;
-      const healthCheck = data.config.healthCheck.model === model.id
-        ? { ...data.config.healthCheck, model: nextId }
-        : data.config.healthCheck;
-      const nextConfig = {
-        ...data.config,
-        healthCheck,
-        models,
-        groups: assignModelGroup(data.config.groups || {}, nextId, runtimeGroup, model.id)
-      };
-      await api.updateConfig(nextConfig);
+      if (creating) {
+        await api.createModel(nextId, payload, runtimeGroup);
+        onCreated?.(nextId);
+      } else if (nextId === model.id) {
+        await api.updateModel(model.id, payload, runtimeGroup);
+      } else {
+        const models = { ...data.config.models };
+        delete models[model.id];
+        models[nextId] = payload;
+        const healthCheck = data.config.healthCheck.model === model.id
+          ? { ...data.config.healthCheck, model: nextId }
+          : data.config.healthCheck;
+        const nextConfig = {
+          ...data.config,
+          healthCheck,
+          models,
+          groups: assignModelGroup(data.config.groups || {}, nextId, runtimeGroup, model.id)
+        };
+        await api.updateConfig(nextConfig);
+      }
       await data.refresh();
       onClose();
     } catch (err) {
@@ -1308,14 +1378,26 @@ function ModelConfigModal({ model, data, onClose }: { model?: ModelInfo; data: I
     }
   };
   const gpuOptions = mergeGpuOptions(data);
+  const chooseFile = (file: string) => {
+    if (!creating) {
+      set({ file });
+      return;
+    }
+    const baseName = ggufName(file);
+    set({
+      file,
+      id: uniqueModelId(baseName, data.config?.models || {}),
+      family: inferModelFamily(baseName)
+    });
+  };
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <section className="modal-panel model-modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Model config">
         <header className="modal-head">
           <div>
-            <span className="modal-kicker">Model config</span>
+            <span className="modal-kicker">{creating ? "New model config" : "Model config"}</span>
             <h2>{draft.id}</h2>
-            <code>{ggufName(draft.file)}</code>
+            <code>{draft.file ? ggufName(draft.file) : "choose a GGUF file"}</code>
           </div>
           <button className="icon-btn" onClick={onClose} title="Close"><X size={18} /></button>
         </header>
@@ -1329,7 +1411,15 @@ function ModelConfigModal({ model, data, onClose }: { model?: ModelInfo; data: I
               <Field label="Model name" value={ggufName(draft.file)} disabled />
               <Field label="Family" value={draft.family} onChange={(value) => set({ family: value })} />
               <Field label="Profile" value={draft.profile} onChange={(value) => set({ profile: value })} />
-              <Field label="GGUF file" value={draft.file} onChange={(value) => set({ file: value })} />
+              <label className="field">
+                <span>GGUF file</span>
+                <select value={draft.file} onChange={(event) => chooseFile(event.target.value)}>
+                  <option value="">Choose from models folder</option>
+                  {data.modelFiles.map((file) => (
+                    <option key={file.relative} value={file.relative}>{file.relative}</option>
+                  ))}
+                </select>
+              </label>
               <Field label="MMProj" value={draft.mmproj || ""} onChange={(value) => set({ mmproj: value })} />
             </div>
           </div>
@@ -1381,7 +1471,7 @@ function ModelConfigModal({ model, data, onClose }: { model?: ModelInfo; data: I
 
         <footer className="modal-actions">
           <button className="secondary-btn" onClick={onClose}>Cancel</button>
-          <button className="primary-btn" disabled={saving || !data.config} onClick={save}>{saving ? "Saving" : "Save"}</button>
+          <button className="primary-btn" disabled={saving || !data.config} onClick={save}>{saving ? "Saving" : creating ? "Create" : "Save"}</button>
         </footer>
       </section>
     </div>
@@ -1561,6 +1651,48 @@ function sortedValues<T extends { id?: string }>(obj: Record<string, T>) {
 function ggufName(file: string) {
   const name = file.split("/").pop() || file;
   return name.replace(/\.gguf$/i, "");
+}
+
+function createDraftModel(data: IgniteData, file?: ModelFile): ModelInfo {
+  const gpu = mergeGpuOptions(data)[0];
+  const baseName = file ? ggufName(file.relative || file.name) : "new-model";
+  const id = uniqueModelId(baseName, data.config?.models || {});
+  return {
+    id,
+    family: inferModelFamily(baseName),
+    profile: "Default",
+    tags: [],
+    file: file?.relative || "",
+    mmproj: "",
+    gpu: gpu?.id || "",
+    args: "-ngl 99 -fa on -c 8192 --split-mode none --main-gpu 0",
+    aliases: [],
+    status: "stopped"
+  };
+}
+
+function uniqueModelId(name: string, existing: Record<string, unknown>) {
+  const base = sanitizeModelId(name) || "model";
+  let id = base;
+  let index = 2;
+  while (existing[id]) {
+    id = `${base}-${index}`;
+    index += 1;
+  }
+  return id;
+}
+
+function sanitizeModelId(name: string) {
+  return name
+    .replace(/\.gguf$/i, "")
+    .replace(/[^A-Za-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+function inferModelFamily(name: string) {
+  const compact = name.replace(/[-_.]+/g, " ").trim();
+  return compact.split(/\s+/).slice(0, 2).join(" ") || "Local";
 }
 
 function mergeGpuOptions(data: IgniteData) {

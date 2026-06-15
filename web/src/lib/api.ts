@@ -233,11 +233,22 @@ export const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config)
   }),
-  updateModel: (id: string, model: Omit<ModelInfo, "id" | "status">) => request<ModelInfo>(`/api/models/${encodeURIComponent(id)}/config`, {
+  updateGroups: (groups: IgniteConfig["groups"]) => request<{ status: string; groups: IgniteConfig["groups"] }>("/api/groups", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(model)
+    body: JSON.stringify(groups)
   }),
+  createModel: (id: string, model: Omit<ModelInfo, "id" | "status">, group?: string) => request<ModelInfo>("/api/models", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, model, group: group || "" })
+  }),
+  updateModel: (id: string, model: Omit<ModelInfo, "id" | "status">, group?: string) => request<ModelInfo>(`/api/models/${encodeURIComponent(id)}/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, group: group || "" })
+  }),
+  deleteModel: (id: string) => request<{ status: string }>(`/api/models/${encodeURIComponent(id)}/config`, { method: "DELETE" }),
   buildBackend: (id: string) => request<BackendJob>(`/api/backends/${encodeURIComponent(id)}/build`, { method: "POST" }),
   updateBackend: (id: string) => request<BackendJob>(`/api/backends/${encodeURIComponent(id)}/update`, { method: "POST" })
 };
