@@ -933,6 +933,11 @@ function LogsView({ data }: { data: IgniteData }) {
   return (
     <section className="view">
       <PageHeader title="Logs" detail={bundle?.directory || data.config?.logsPath || ""} />
+      <div className="log-summary">
+        <span><span className="dot hot" /> Saved to disk</span>
+        <span>Updates every 5 seconds</span>
+        <span>Newest entries first</span>
+      </div>
       <div className="logs-layout">
         <div className="panel log-panel">
           <div className="panel-head">
@@ -940,6 +945,7 @@ function LogsView({ data }: { data: IgniteData }) {
               <b>Ignite</b>
               <small>{bundle?.ignite.path || "No log file yet"}</small>
             </div>
+            <span>{bundle?.ignite.lines.length || 0} recent lines</span>
           </div>
           <LogLines lines={bundle?.ignite.lines || []} empty="No Ignite logs yet." />
         </div>
@@ -949,11 +955,14 @@ function LogsView({ data }: { data: IgniteData }) {
               <b>llama.cpp</b>
               <small>{activeModelLog?.path || "No model log file yet"}</small>
             </div>
-            {modelLogs.length > 0 ? (
-              <select value={activeModelLog?.name || ""} onChange={(event) => setSelectedModel(event.target.value)}>
-                {modelLogs.map((log) => <option key={log.name} value={log.name}>{log.name}</option>)}
-              </select>
-            ) : null}
+            <div className="log-controls">
+              {activeModelLog ? <span>{activeModelLog.lines.length} recent lines</span> : null}
+              {modelLogs.length > 0 ? (
+                <select value={activeModelLog?.name || ""} onChange={(event) => setSelectedModel(event.target.value)}>
+                  {modelLogs.map((log) => <option key={log.name} value={log.name}>{log.name.replace(/\.log$/, "")}</option>)}
+                </select>
+              ) : null}
+            </div>
           </div>
           <LogLines lines={activeModelLog?.lines || []} empty="No llama.cpp logs yet. Load a model to start capturing stdout/stderr." />
         </div>
@@ -1028,7 +1037,7 @@ function Playground({ data }: { data: IgniteData }) {
       });
       const text = await res.text();
       const elapsed = Math.round(performance.now() - started);
-      if (!res.ok) throw new Error(text || res.statusText);
+      if (!res.ok) throw new Error(responseErrorMessage(text, res.statusText));
       setElapsedMs(elapsed);
       setRawResponse(text);
       void data.refresh();
@@ -1314,13 +1323,14 @@ function ModelConfigModal({ model, data, creating = false, onClose, onCreated }:
   const [runtimeGroup, setRuntimeGroup] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const openedModelId = model?.id;
 
   useEffect(() => {
     setDraft(model);
     const nextGroup = model && data.config ? getModelAssignedGroup(model.id, data.config.groups || {}) : "";
     setRuntimeGroup(nextGroup);
     setError("");
-  }, [data.config, model]);
+  }, [openedModelId, creating]);
 
   if (!draft) return null;
 
@@ -1624,6 +1634,15 @@ function formatRawResponse(text: string) {
     return JSON.stringify(json, null, 2);
   } catch {
     return text;
+  }
+}
+
+function responseErrorMessage(text: string, fallback: string) {
+  try {
+    const parsed = JSON.parse(text);
+    return parsed?.error?.message || parsed?.message || text || fallback;
+  } catch {
+    return text || fallback;
   }
 }
 

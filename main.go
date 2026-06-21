@@ -158,9 +158,29 @@ func spaHandler() http.Handler {
 func requestLogger(logs *logger.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
-		logs.Infof("%s %s %s", r.Method, r.URL.Path, fmtDuration(time.Since(start)))
+		tracked := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(tracked, r)
+		duration := time.Since(start)
+		if r.Method != http.MethodGet || strings.HasPrefix(r.URL.Path, "/v1/") || tracked.status >= 400 || duration >= 2*time.Second {
+			logs.Infof("%s %s %d %s", r.Method, r.URL.Path, tracked.status, fmtDuration(duration))
+		}
 	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func fmtDuration(d time.Duration) string {

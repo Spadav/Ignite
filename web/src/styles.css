@@ -1395,6 +1395,21 @@ code {
   gap: 14px;
 }
 
+.log-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: -4px 0 14px;
+  color: #938a80;
+  font-size: 12px;
+}
+
+.log-summary > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .log-panel {
   padding: 14px;
   display: grid;
@@ -1416,6 +1431,19 @@ code {
 
 .log-panel select {
   max-width: 260px;
+}
+
+.log-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.log-controls > span,
+.log-panel .panel-head > span {
+  color: #938a80;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .log-lines {

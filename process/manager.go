@@ -148,7 +148,7 @@ func (m *Manager) EnsureLoaded(ctx context.Context, modelID string) (LoadedModel
 	go m.waitForExit(modelID, cmd)
 
 	timeout := time.Duration(cfg.HealthCheck.Timeout) * time.Second
-	if err := waitForHealth(ctx, port, timeout); err != nil {
+	if err := m.waitForModelHealth(ctx, proc, timeout); err != nil {
 		_ = m.Unload(ctx, modelID)
 		return LoadedModel{}, err
 	}
@@ -161,6 +161,29 @@ func (m *Manager) EnsureLoaded(ctx context.Context, modelID string) (LoadedModel
 
 	m.logs.Infof("model %s loaded on port %d pid %d", modelID, state.Port, state.PID)
 	return state, nil
+}
+
+func (m *Manager) waitForModelHealth(ctx context.Context, proc *trackedProcess, timeout time.Duration) error {
+	healthCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	healthResult := make(chan error, 1)
+	go func() {
+		healthResult <- waitForHealth(healthCtx, proc.state.Port, timeout)
+	}()
+
+	select {
+	case err := <-healthResult:
+		return err
+	case <-proc.done:
+		m.mu.Lock()
+		message := proc.state.Error
+		modelID := proc.state.ModelID
+		m.mu.Unlock()
+		if message == "" {
+			message = "llama-server exited before becoming healthy"
+		}
+		return fmt.Errorf("model %s failed during startup: %s; see Logs for llama.cpp output", modelID, message)
+	}
 }
 
 func (m *Manager) loadLock(modelID string) *sync.Mutex {
