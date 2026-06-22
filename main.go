@@ -67,6 +67,7 @@ func main() {
 	mux.HandleFunc("GET /api/about", apiHandlers.About)
 	mux.HandleFunc("GET /api/gpus", apiHandlers.GPUs)
 	mux.HandleFunc("GET /api/backends", apiHandlers.Backends)
+	mux.HandleFunc("GET /api/backends/{id}/flags", apiHandlers.BackendFlags)
 	mux.HandleFunc("POST /api/backends/{id}/build", apiHandlers.BuildBackend)
 	mux.HandleFunc("POST /api/backends/{id}/update", apiHandlers.UpdateBackend)
 	mux.HandleFunc("GET /api/backend-jobs", apiHandlers.BackendJobs)

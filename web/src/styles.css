@@ -1460,6 +1460,101 @@ code {
   overflow-wrap: anywhere;
 }
 
+.flag-editor {
+  display: grid;
+  gap: 12px;
+}
+
+.flag-catalog-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.flag-catalog-meta > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.flag-catalog-meta small,
+.expert-command-toggle small {
+  color: #8f877d;
+  font-size: 11px;
+}
+
+.flag-add-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.8fr);
+  gap: 8px;
+}
+
+.configured-flags {
+  display: grid;
+  border: 1px solid #2a2724;
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.configured-flag {
+  min-height: 66px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.55fr);
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid #262320;
+}
+
+.configured-flag:last-child {
+  border-bottom: 0;
+}
+
+.configured-flag-info {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.configured-flag-info > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.configured-flag-info span,
+.configured-flag-info small {
+  color: #8f877d;
+  font-size: 11px;
+}
+
+.configured-flag-info small {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.configured-flag-control {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 7px;
+}
+
+.flag-enabled {
+  color: #72bc8a;
+  font-size: 12px;
+}
+
+.expert-command-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .playground-form {
   display: grid;
   gap: 13px;
@@ -1799,6 +1894,17 @@ code {
   .log-panel select {
     max-width: none;
     width: 100%;
+  }
+  .flag-add-controls,
+  .configured-flag {
+    grid-template-columns: 1fr;
+  }
+  .configured-flag {
+    align-items: stretch;
+  }
+  .expert-command-toggle {
+    align-items: flex-start;
+    flex-direction: column;
   }
   .playground-response pre { min-height: 260px; max-height: none; }
   .table-row, .diagnostics .table-row, .runtime-detail { grid-template-columns: 1fr; }

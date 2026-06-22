@@ -200,6 +200,21 @@ func (h *Handlers) Backends(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handlers) BackendFlags(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	backendCfg, ok := h.state.Config().Backends[id]
+	if !ok {
+		writeError(w, http.StatusNotFound, "backend not found")
+		return
+	}
+	catalog, err := backend.DiscoverFlags(r.Context(), id, backendCfg)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, catalog)
+}
+
 type onboardingState struct {
 	Complete bool       `json:"complete"`
 	DoneAt   *time.Time `json:"doneAt,omitempty"`

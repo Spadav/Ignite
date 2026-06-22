@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import logo from "./assets/ignite-logo.jpeg";
-import { api, HFModelFile, HFModelResult, IgniteConfig, ModelFile, ModelInfo, TrafficCapture } from "./lib/api";
+import { api, BackendFlag, BackendFlagCatalog, HFModelFile, HFModelResult, IgniteConfig, ModelFile, ModelInfo, TrafficCapture } from "./lib/api";
 import { IgniteData, useIgniteData } from "./lib/useIgniteData";
 
 type View = "dashboard" | "models" | "config" | "runtime" | "logs" | "engines" | "playground" | "settings";
@@ -1323,7 +1323,12 @@ function ModelConfigModal({ model, data, creating = false, onClose, onCreated }:
   const [runtimeGroup, setRuntimeGroup] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [flagCatalog, setFlagCatalog] = useState<BackendFlagCatalog>();
+  const [flagsLoading, setFlagsLoading] = useState(false);
+  const [flagsError, setFlagsError] = useState("");
+  const [rawArgsOpen, setRawArgsOpen] = useState(false);
   const openedModelId = model?.id;
+  const activeBackend = data.config?.activeBackend || data.status?.activeBackend;
 
   useEffect(() => {
     setDraft(model);
@@ -1331,6 +1336,26 @@ function ModelConfigModal({ model, data, creating = false, onClose, onCreated }:
     setRuntimeGroup(nextGroup);
     setError("");
   }, [openedModelId, creating]);
+
+  useEffect(() => {
+    if (!openedModelId || !activeBackend) return;
+    let cancelled = false;
+    setFlagsLoading(true);
+    setFlagsError("");
+    api.backendFlags(activeBackend)
+      .then((catalog) => {
+        if (!cancelled) setFlagCatalog(catalog);
+      })
+      .catch((err) => {
+        if (!cancelled) setFlagsError(err instanceof Error ? err.message : "Unable to inspect llama.cpp flags.");
+      })
+      .finally(() => {
+        if (!cancelled) setFlagsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [openedModelId, activeBackend]);
 
   if (!draft) return null;
 
@@ -1474,8 +1499,21 @@ function ModelConfigModal({ model, data, creating = false, onClose, onCreated }:
           </div>
 
           <div className="editor-section">
-            <div className="editor-section-title">Command</div>
-            <Field label="llama-server args" value={draft.args} multiline tall onChange={(value) => set({ args: value })} />
+            <div className="editor-section-title">llama.cpp flags</div>
+            <ModelFlagsEditor
+              args={draft.args}
+              catalog={flagCatalog}
+              loading={flagsLoading}
+              error={flagsError}
+              onChange={(args) => set({ args })}
+            />
+            <div className="expert-command-toggle">
+              <button className="secondary-btn" onClick={() => setRawArgsOpen((current) => !current)}>
+                {rawArgsOpen ? "Hide expert command" : "Expert command"}
+              </button>
+              <small>Unknown or custom arguments are preserved.</small>
+            </div>
+            {rawArgsOpen ? <Field label="Raw llama-server args" value={draft.args} multiline tall onChange={(value) => set({ args: value })} /> : null}
           </div>
         </div>
 
@@ -1484,6 +1522,91 @@ function ModelConfigModal({ model, data, creating = false, onClose, onCreated }:
           <button className="primary-btn" disabled={saving || !data.config} onClick={save}>{saving ? "Saving" : creating ? "Create" : "Save"}</button>
         </footer>
       </section>
+    </div>
+  );
+}
+
+type ConfiguredBackendFlag = {
+  flag: BackendFlag;
+  alias: string;
+  value: string;
+  negative: boolean;
+};
+
+function ModelFlagsEditor({ args, catalog, loading, error, onChange }: { args: string; catalog?: BackendFlagCatalog; loading: boolean; error: string; onChange: (args: string) => void }) {
+  const [search, setSearch] = useState("");
+  const configured = configuredBackendFlags(args, catalog?.flags || []);
+  const configuredNames = new Set(configured.map((entry) => entry.flag.name));
+  const query = search.trim().toLowerCase();
+  const available = (catalog?.flags || []).filter((flag) => {
+    if (flag.managed || configuredNames.has(flag.name)) return false;
+    if (!query) return true;
+    return `${flag.name} ${flag.aliases.join(" ")} ${flag.description} ${flag.category}`.toLowerCase().includes(query);
+  });
+
+  const addFlag = (name: string) => {
+    const flag = catalog?.flags.find((item) => item.name === name);
+    if (!flag) return;
+    onChange(updateBackendFlag(args, flag, defaultFlagValue(flag), true));
+    setSearch("");
+  };
+
+  return (
+    <div className="flag-editor">
+      <div className="flag-catalog-meta">
+        <div>
+          <b>{catalog ? `${catalog.flags.filter((flag) => !flag.managed).length} flags available` : "Backend flag catalog"}</b>
+          <small>{catalog ? `${catalog.backendId}${catalog.gitHash ? ` · ${catalog.gitHash}` : ""}` : loading ? "Reading llama-server --help" : "Catalog unavailable"}</small>
+        </div>
+        {loading ? <Loader2 size={16} className="spin" /> : null}
+      </div>
+      {error ? <div className="inline-error">{error}</div> : null}
+      {catalog ? (
+        <div className="flag-add-controls">
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search llama.cpp flags" />
+          <select value="" onChange={(event) => addFlag(event.target.value)}>
+            <option value="">Add flag</option>
+            {groupFlagsByCategory(available).map(([category, flags]) => (
+              <optgroup key={category} label={category}>
+                {flags.slice(0, 60).map((flag) => <option key={flag.name} value={flag.name}>{flag.name} · {shortFlagDescription(flag.description)}</option>)}
+              </optgroup>
+            ))}
+          </select>
+        </div>
+      ) : null}
+      <div className="configured-flags">
+        {configured.length === 0 ? <div className="empty compact">No recognized backend flags in this command.</div> : configured.map((entry) => (
+          <div className="configured-flag" key={entry.flag.name}>
+            <div className="configured-flag-info">
+              <div><b>{entry.flag.name}</b><span>{entry.flag.category}</span></div>
+              <small>{entry.flag.description}</small>
+            </div>
+            <div className="configured-flag-control">
+              {entry.flag.kind === "boolean" ? (
+                entry.flag.negativeName ? (
+                  <select value={entry.negative ? "off" : "on"} onChange={(event) => onChange(updateBackendFlag(args, entry.flag, event.target.value, true))}>
+                    <option value="on">On</option>
+                    <option value="off">Off</option>
+                  </select>
+                ) : <span className="flag-enabled">Enabled</span>
+              ) : entry.flag.kind === "select" && entry.flag.choices?.length ? (
+                <select value={entry.value} onChange={(event) => onChange(updateBackendFlag(args, entry.flag, event.target.value, true))}>
+                  {!entry.flag.choices.includes(entry.value) ? <option value={entry.value}>{entry.value || "Choose value"}</option> : null}
+                  {entry.flag.choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
+                </select>
+              ) : (
+                <input
+                  type={entry.flag.kind === "number" ? "number" : "text"}
+                  value={entry.value}
+                  placeholder={entry.flag.valueHint || "value"}
+                  onChange={(event) => onChange(updateBackendFlag(args, entry.flag, event.target.value, true))}
+                />
+              )}
+              <button className="icon-btn" onClick={() => onChange(updateBackendFlag(args, entry.flag, "", false))} title={`Remove ${entry.flag.name}`}><X size={14} /></button>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1644,6 +1767,126 @@ function responseErrorMessage(text: string, fallback: string) {
   } catch {
     return text || fallback;
   }
+}
+
+function configuredBackendFlags(args: string, flags: BackendFlag[]): ConfiguredBackendFlag[] {
+  const aliases = new Map<string, BackendFlag>();
+  for (const flag of flags) {
+    for (const alias of flag.aliases) aliases.set(alias, flag);
+  }
+  const configured = new Map<string, ConfiguredBackendFlag>();
+  const tokens = tokenizeCommandArgs(args);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const equals = token.indexOf("=");
+    const alias = equals > 0 ? token.slice(0, equals) : token;
+    const flag = aliases.get(alias);
+    if (!flag || flag.managed) continue;
+    let value = equals > 0 ? token.slice(equals + 1) : "";
+    if (flag.kind !== "boolean" && equals < 0 && index + 1 < tokens.length) {
+      value = tokens[index + 1];
+      index += 1;
+    }
+    configured.set(flag.name, {
+      flag,
+      alias,
+      value,
+      negative: isNegativeFlagAlias(alias, flag)
+    });
+  }
+  return [...configured.values()];
+}
+
+function updateBackendFlag(args: string, flag: BackendFlag, value: string, enabled: boolean) {
+  const aliases = new Set(flag.aliases);
+  const tokens = tokenizeCommandArgs(args);
+  const next: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const equals = token.indexOf("=");
+    const alias = equals > 0 ? token.slice(0, equals) : token;
+    if (!aliases.has(alias)) {
+      next.push(token);
+      continue;
+    }
+    if (flag.kind !== "boolean" && equals < 0 && index + 1 < tokens.length) index += 1;
+  }
+  if (enabled) {
+    if (flag.kind === "boolean") {
+      next.push(value === "off" && flag.negativeName ? flag.negativeName : flag.name);
+    } else {
+      next.push(flag.name);
+      if (value !== "") next.push(value);
+    }
+  }
+  return serializeCommandArgs(next);
+}
+
+function tokenizeCommandArgs(input: string) {
+  const tokens: string[] = [];
+  let current = "";
+  let quote = "";
+  let escaped = false;
+  for (const char of input) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+    } else if (char === "\\") {
+      escaped = true;
+    } else if (quote) {
+      if (char === quote) quote = "";
+      else current += char;
+    } else if (char === "'" || char === '"') {
+      quote = char;
+    } else if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+    } else {
+      current += char;
+    }
+  }
+  if (escaped) current += "\\";
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+function serializeCommandArgs(tokens: string[]) {
+  return tokens.map((token) => {
+    if (/^[A-Za-z0-9_./:=,+;{}-]+$/.test(token)) return token;
+    return `"${token.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  }).join(" ");
+}
+
+function isNegativeFlagAlias(alias: string, flag: BackendFlag) {
+  if (!flag.negativeName) return false;
+  return alias === flag.negativeName || (alias.startsWith("-n") && !alias.startsWith("--"));
+}
+
+function defaultFlagValue(flag: BackendFlag) {
+  if (flag.kind === "boolean") return "on";
+  if (flag.choices?.length) {
+    const normalizedDefault = flag.default?.toLowerCase() || "";
+    return flag.choices.find((choice) => normalizedDefault.includes(choice.toLowerCase())) || (flag.choices.includes("auto") ? "auto" : flag.choices[0]);
+  }
+  if (flag.kind === "number") return flag.default?.match(/-?\d+(?:\.\d+)?/)?.[0] || "";
+  return "";
+}
+
+function groupFlagsByCategory(flags: BackendFlag[]) {
+  const grouped = new Map<string, BackendFlag[]>();
+  for (const flag of flags) {
+    const items = grouped.get(flag.category) || [];
+    items.push(flag);
+    grouped.set(flag.category, items);
+  }
+  return [...grouped.entries()];
+}
+
+function shortFlagDescription(description: string) {
+  const clean = description.replace(/\s+/g, " ").trim();
+  return clean.length > 72 ? `${clean.slice(0, 69)}...` : clean;
 }
 
 function byId(models: ModelInfo[]) {

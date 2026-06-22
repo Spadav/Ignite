@@ -135,6 +135,26 @@ export type BackendJob = {
   plan: BackendPlan;
 };
 
+export type BackendFlag = {
+  name: string;
+  aliases: string[];
+  category: string;
+  kind: "boolean" | "number" | "select" | "string";
+  valueHint?: string;
+  description: string;
+  default?: string;
+  choices?: string[];
+  negativeName?: string;
+  managed?: boolean;
+};
+
+export type BackendFlagCatalog = {
+  backendId: string;
+  binary: string;
+  gitHash?: string;
+  flags: BackendFlag[];
+};
+
 export type OnboardingState = {
   complete: boolean;
   doneAt?: string;
@@ -222,6 +242,7 @@ export const api = {
   config: () => request<IgniteConfig>("/api/config"),
   diagnostics: () => request<Diagnostic[]>("/api/config/diagnostics"),
   backends: () => request<{ active: string; items: Record<string, unknown>; plans: Record<string, BackendPlan>; engines: Record<string, EngineInfo> }>("/api/backends"),
+  backendFlags: (id: string) => request<BackendFlagCatalog>(`/api/backends/${encodeURIComponent(id)}/flags`),
   backendJobs: () => request<BackendJob[]>("/api/backend-jobs"),
   onboarding: () => request<OnboardingState>("/api/onboarding"),
   completeOnboarding: () => request<OnboardingState>("/api/onboarding/complete", { method: "POST" }),
