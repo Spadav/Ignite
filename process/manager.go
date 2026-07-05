@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -243,6 +244,24 @@ func (m *Manager) UnloadAll(ctx context.Context) error {
 	return nil
 }
 
+func (m *Manager) StopRuntime(ctx context.Context) (int, error) {
+	stopped := len(m.Snapshot())
+	if err := m.UnloadAll(ctx); err != nil {
+		return stopped, err
+	}
+
+	stale, err := m.stopStaleBackendProcesses(ctx)
+	if err != nil {
+		return stopped + stale, err
+	}
+	if stopped+stale == 0 {
+		m.logs.Infof("runtime stop requested; no llama.cpp processes were running")
+	} else {
+		m.logs.Infof("runtime stopped %d llama.cpp process(es)", stopped+stale)
+	}
+	return stopped + stale, nil
+}
+
 func (m *Manager) unloadGroupMembers(ctx context.Context, cfg *config.Config, targetID string) error {
 	for _, memberID := range swapUnloadCandidates(cfg, targetID) {
 		if _, ok := m.Get(memberID); ok {
@@ -275,6 +294,124 @@ func swapUnloadCandidates(cfg *config.Config, targetID string) []string {
 		out = append(out, memberID)
 	}
 	return out
+}
+
+func (m *Manager) stopStaleBackendProcesses(ctx context.Context) (int, error) {
+	cfg := m.state.Config()
+	backend := cfg.ActiveBackendConfig()
+	binary, err := filepath.Abs(expandPath(filepath.Join(backend.Path, backend.Binary)))
+	if err != nil {
+		binary = expandPath(filepath.Join(backend.Path, backend.Binary))
+	}
+	modelsPath, err := filepath.Abs(expandPath(cfg.ModelsPath))
+	if err != nil {
+		modelsPath = expandPath(cfg.ModelsPath)
+	}
+
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return 0, nil
+	}
+
+	var stopped int
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid == os.Getpid() {
+			continue
+		}
+		if m.isTrackedPID(pid) {
+			continue
+		}
+		if !matchesIgniteBackendProcess(pid, binary, modelsPath) {
+			continue
+		}
+		if err := terminatePID(ctx, pid); err != nil {
+			return stopped, err
+		}
+		stopped++
+	}
+	return stopped, nil
+}
+
+func (m *Manager) isTrackedPID(pid int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, proc := range m.loaded {
+		if proc.state.PID == pid {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesIgniteBackendProcess(pid int, binary, modelsPath string) bool {
+	exe, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
+	if err != nil {
+		return false
+	}
+	exeAbs, err := filepath.Abs(exe)
+	if err == nil {
+		exe = exeAbs
+	}
+	if exe != binary {
+		return false
+	}
+
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	if err != nil {
+		return false
+	}
+	args := strings.Split(strings.TrimRight(string(data), "\x00"), "\x00")
+	for i, arg := range args {
+		if arg == "-m" && i+1 < len(args) && isWithinPath(args[i+1], modelsPath) {
+			return true
+		}
+		if strings.HasPrefix(arg, modelsPath+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isWithinPath(path, parent string) bool {
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		path = abs
+	}
+	rel, err := filepath.Rel(parent, path)
+	return err == nil && rel != "." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != ".."
+}
+
+func terminatePID(ctx context.Context, pid int) error {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	_ = proc.Signal(syscall.SIGTERM)
+
+	done := make(chan struct{})
+	go func() {
+		for processAlive(pid) {
+			time.Sleep(100 * time.Millisecond)
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		_ = proc.Kill()
+		return ctx.Err()
+	case <-time.After(5 * time.Second):
+		_ = proc.Kill()
+		return nil
+	}
+}
+
+func processAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil
 }
 
 func (m *Manager) commandForModel(modelID string, model config.Model, port int) (*exec.Cmd, error) {

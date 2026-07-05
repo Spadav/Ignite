@@ -787,24 +787,43 @@ function Engines({ data }: { data: IgniteData }) {
     <section className="view">
       <PageHeader title="Engines" detail={data.status?.activeBackend || "mainline"} />
       <div className="engine-grid">
-        {sortedValues(data.backendPlans).map((plan) => (
-          <div className="panel" key={plan.id}>
-            <div className="panel-head"><b>{plan.id}</b><span>{plan.cudaArchitectures?.join(";") || "auto"}</span></div>
-            <div className="kv"><span>path</span><code>{plan.path}</code></div>
-            <div className="kv"><span>binary</span><code>{plan.binary}</code></div>
-            <pre>{plan.configureCommand.join(" \\\n  ")}</pre>
-            <div className="row-actions">
-              <ActionButton icon={Wrench} label="Build" onClick={() => void api.buildBackend(plan.id).then(data.refresh)} />
-              <ActionButton icon={RefreshCw} label="Update" onClick={() => void api.updateBackend(plan.id).then(data.refresh)} />
+        {sortedValues(data.backendPlans).map((plan) => {
+          const engine = data.engines[plan.id];
+          const latestJob = latestBackendJob(data.backendJobs, plan.id);
+          return (
+            <div className="panel" key={plan.id}>
+              <div className="panel-head"><b>{plan.id}</b><span className={engineStatusClass(engine)}>{engineStatusLabel(engine)}</span></div>
+              <div className="engine-status-grid">
+                <Metric compact label="repo" value={engineRepoLabel(engine)} />
+                <Metric compact label="binary" value={engine?.ready ? "ready" : "missing"} />
+              </div>
+              <div className="kv"><span>local commit</span><code>{engine?.gitHash || "-"}</code></div>
+              <div className="kv"><span>remote commit</span><code>{engine?.remoteHash || "-"}</code></div>
+              <div className="kv"><span>binary updated</span><code>{formatDateTime(engine?.binaryModifiedAt)}</code></div>
+              <div className="kv"><span>path</span><code>{plan.path}</code></div>
+              <div className="kv"><span>binary</span><code>{plan.binary}</code></div>
+              {engine?.updateError ? <div className="inline-error compact">Update check failed: {engine.updateError}</div> : null}
+              {latestJob ? <div className="job-summary">
+                <b>{latestJob.kind} {latestJob.status}</b>
+                <small>{summarizeBackendJob(latestJob)}</small>
+              </div> : null}
+              <details className="engine-details">
+                <summary>Build command</summary>
+                <pre>{plan.configureCommand.join(" \\\n  ")}</pre>
+              </details>
+              <div className="row-actions">
+                <ActionButton icon={Wrench} label="Build" onClick={() => void api.buildBackend(plan.id).then(data.refresh)} />
+                <ActionButton icon={RefreshCw} label="Update" onClick={() => void api.updateBackend(plan.id).then(data.refresh)} />
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <SectionTitle title="Jobs" />
       <div className="table-card">
         {data.backendJobs.length === 0 ? <div className="empty">No backend jobs</div> : data.backendJobs.map((job) => (
-          <div className="table-row" key={job.id}>
-            <b>{job.kind}</b><span>{job.backendId}</span><span className="mono">{job.status}</span><small>{job.error || job.logs[job.logs.length - 1]}</small>
+          <div className="table-row engine-job-row" key={job.id}>
+            <b>{job.kind}</b><span>{job.backendId}</span><span className="mono">{job.status}</span><small>{summarizeBackendJob(job)}</small>
           </div>
         ))}
       </div>
@@ -818,6 +837,8 @@ function Runtime({ data }: { data: IgniteData }) {
   const [reasoningExpanded, setReasoningExpanded] = useState<string>();
   const [expertExpanded, setExpertExpanded] = useState<string>();
   const [error, setError] = useState("");
+  const [stopping, setStopping] = useState(false);
+  const [runtimeNotice, setRuntimeNotice] = useState("");
 
   const refreshTraffic = useCallback(async () => {
     try {
@@ -837,9 +858,30 @@ function Runtime({ data }: { data: IgniteData }) {
   }, [refreshTraffic]);
 
   const running = data.status?.loadedModels || [];
+  const stopRuntime = async () => {
+    if (!window.confirm("Stop all llama.cpp runtime processes managed by Ignite?")) return;
+    setStopping(true);
+    try {
+      const result = await api.stopRuntime();
+      await data.refresh();
+      await refreshTraffic();
+      setRuntimeNotice(result.stopped > 0 ? `Runtime stopped. ${result.stopped} llama.cpp process${result.stopped === 1 ? "" : "es"} stopped.` : "Runtime is stopped. No llama.cpp processes were running.");
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to stop runtime.");
+    } finally {
+      setStopping(false);
+    }
+  };
+
   return (
     <section className="view">
-      <PageHeader title="Runtime" detail={`${traffic.length} captured requests`} />
+      <PageHeader title="Runtime" detail={`${traffic.length} captured requests`}>
+        <button className="secondary-btn danger-btn" disabled={stopping} onClick={() => void stopRuntime()}>
+          <Square size={14} /> {stopping ? "Stopping" : "Stop runtime"}
+        </button>
+      </PageHeader>
+      {runtimeNotice ? <div className="inline-note">{runtimeNotice}</div> : null}
       <div className="stat-grid runtime-stats">
         <Metric label="Running" value={String(running.length)} />
         <Metric label="Requests" value={String(traffic.length)} />
@@ -921,6 +963,9 @@ function RuntimeDetail({
 function LogsView({ data }: { data: IgniteData }) {
   const bundle = data.logBundle;
   const [selectedModel, setSelectedModel] = useState("");
+  const [clearing, setClearing] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
   const modelLogs = bundle?.models || [];
   const activeModelLog = modelLogs.find((log) => log.name === selectedModel) || modelLogs[0];
   useEffect(() => {
@@ -930,9 +975,30 @@ function LogsView({ data }: { data: IgniteData }) {
     }
   }, [modelLogs, selectedModel]);
 
+  const clearLogs = async () => {
+    if (!window.confirm("Clear Ignite and llama.cpp log files?")) return;
+    setClearing(true);
+    try {
+      await api.clearLogs();
+      await data.refresh();
+      setNotice("Logs cleared.");
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to clear logs.");
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
     <section className="view">
-      <PageHeader title="Logs" detail={bundle?.directory || data.config?.logsPath || ""} />
+      <PageHeader title="Logs" detail={bundle?.directory || data.config?.logsPath || ""}>
+        <button className="secondary-btn danger-btn" disabled={clearing} onClick={() => void clearLogs()}>
+          <X size={14} /> {clearing ? "Clearing" : "Clear logs"}
+        </button>
+      </PageHeader>
+      {notice ? <div className="inline-note">{notice}</div> : null}
+      {error ? <div className="inline-error">{error}</div> : null}
       <div className="log-summary">
         <span><span className="dot hot" /> Saved to disk</span>
         <span>Updates every 5 seconds</span>
@@ -1239,12 +1305,17 @@ function Placeholder({ title, subtitle }: { title: string; subtitle: string }) {
   );
 }
 
-function PageHeader({ title, detail }: { title: string; detail?: string }) {
+function PageHeader({ title, detail, children }: { title: string; detail?: string; children?: React.ReactNode }) {
   return (
-    <header className="page-head">
-      <h1>{title}</h1>
-      {detail ? <span><span className="dot hot" /> {detail}</span> : null}
-      <code>http://localhost:8091/v1</code>
+    <header className={children ? "page-head with-action" : "page-head"}>
+      <div className="page-title">
+        <h1>{title}</h1>
+        {detail ? <span><span className="dot hot" /> {detail}</span> : null}
+      </div>
+      <div className="page-tools">
+        <code>http://localhost:8091/v1</code>
+        {children}
+      </div>
     </header>
   );
 }
@@ -2109,6 +2180,48 @@ function filterFittingModels(models: HFModelResult[], gpus: { vram: number }[]) 
 function latestBackendJob(jobs: IgniteData["backendJobs"], backendId?: string) {
   if (!backendId) return undefined;
   return jobs.find((job) => job.backendId === backendId);
+}
+
+function engineStatusLabel(engine?: IgniteData["engines"][string]) {
+  if (!engine?.cloned) return "not cloned";
+  if (!engine.ready) return "build missing";
+  if (engine.updateAvailable) return "update available";
+  if (engine.updateChecked) return "up to date";
+  return "ready";
+}
+
+function engineStatusClass(engine?: IgniteData["engines"][string]) {
+  if (!engine?.cloned || !engine.ready || engine.updateAvailable) return "status error";
+  return "status running";
+}
+
+function engineRepoLabel(engine?: IgniteData["engines"][string]) {
+  if (!engine?.cloned) return "missing";
+  if (engine.updateAvailable) return "behind";
+  if (engine.updateChecked) return "current";
+  return "unchecked";
+}
+
+function summarizeBackendJob(job: IgniteData["backendJobs"][number]) {
+  if (job.error) return job.error;
+  const commandLines = job.logs.filter((line) => line.startsWith("$ "));
+  const lastOutput = [...job.logs].reverse().find((line) => line.trim() && !line.startsWith("$ "));
+  const stages = commandLines.map((line) => {
+    if (line.includes("git pull")) return "pull";
+    if (line.includes("git clone")) return "clone";
+    if (line.includes("cmake -S")) return "configure";
+    if (line.includes("cmake --build")) return "build";
+    return line.replace(/^\$ /, "").split(" ")[0];
+  });
+  const stageText = stages.length ? stages.join(" -> ") : "waiting";
+  return lastOutput ? `${stageText}: ${lastOutput}` : stageText;
+}
+
+function formatDateTime(value?: string) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 }
 
 function shortGpuName(name: string) {

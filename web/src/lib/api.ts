@@ -121,6 +121,11 @@ export type EngineInfo = {
   ready: boolean;
   cloned: boolean;
   gitHash?: string;
+  remoteHash?: string;
+  updateChecked: boolean;
+  updateAvailable: boolean;
+  updateError?: string;
+  binaryModifiedAt?: string;
 };
 
 export type BackendJob = {
@@ -239,6 +244,7 @@ export const api = {
   }),
   cancelDownload: (id: string) => request<{ status: string }>(`/api/downloads/${encodeURIComponent(id)}`, { method: "DELETE" }),
   runtimeTraffic: () => request<TrafficCapture[]>("/api/runtime/traffic"),
+  stopRuntime: () => request<{ status: string; stopped: number }>("/api/runtime/stop", { method: "POST" }),
   config: () => request<IgniteConfig>("/api/config"),
   diagnostics: () => request<Diagnostic[]>("/api/config/diagnostics"),
   backends: () => request<{ active: string; items: Record<string, unknown>; plans: Record<string, BackendPlan>; engines: Record<string, EngineInfo> }>("/api/backends"),
@@ -247,6 +253,7 @@ export const api = {
   onboarding: () => request<OnboardingState>("/api/onboarding"),
   completeOnboarding: () => request<OnboardingState>("/api/onboarding/complete", { method: "POST" }),
   logs: () => request<LogBundle>("/api/logs"),
+  clearLogs: () => request<{ status: string }>("/api/logs", { method: "DELETE" }),
   loadModel: (id: string) => request<LoadedModel>(`/api/models/${encodeURIComponent(id)}/load`, { method: "POST" }),
   unloadModel: (id: string) => request<{ status: string }>(`/api/models/${encodeURIComponent(id)}/unload`, { method: "POST" }),
   updateConfig: (config: IgniteConfig) => request<{ status: string; config: IgniteConfig }>("/api/config", {

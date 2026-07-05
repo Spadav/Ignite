@@ -135,22 +135,40 @@ button { cursor: pointer; }
 }
 
 .page-head {
-  height: 32px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 14px;
   margin-bottom: 20px;
+  min-height: 32px;
 }
 
 .page-head.with-action {
-  justify-content: space-between;
   height: auto;
+}
+
+.page-title,
+.page-tools {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.page-title {
+  flex: 1 1 auto;
+}
+
+.page-tools {
+  flex: 0 1 auto;
+  justify-content: flex-end;
 }
 
 .page-head h1 {
   font-size: 21px;
   line-height: 1.1;
   margin: 0;
+  white-space: nowrap;
 }
 
 .page-head span {
@@ -159,13 +177,13 @@ button { cursor: pointer; }
 }
 
 .page-head code {
-  margin-left: auto;
   border: 1px solid #2b2825;
   border-radius: 7px;
   background: #131211;
   color: #b5afa6;
   padding: 7px 10px;
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .stat-grid {
@@ -191,6 +209,56 @@ button { cursor: pointer; }
 
 .metric.compact {
   min-height: 86px;
+}
+
+.engine-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+
+.job-summary {
+  border: 1px solid #2a2622;
+  border-radius: 7px;
+  background: #100f0e;
+  padding: 10px;
+  margin: 10px 0;
+}
+
+.job-summary b,
+.job-summary small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-summary small {
+  margin-top: 5px;
+}
+
+.engine-details {
+  margin: 10px 0;
+}
+
+.engine-details summary {
+  color: #9d958a;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.engine-details pre {
+  margin-top: 8px;
+  max-height: 220px;
+}
+
+.engine-job-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .metric span, .progress-row span, .tile-top, .kv span, .card-title span, .setup-body p, small, .muted {
@@ -1031,6 +1099,16 @@ code {
   background: #21110d;
   color: #ffb199;
   padding: 10px 12px;
+  font-size: 13px;
+}
+
+.inline-note {
+  border: 1px solid #2b4d36;
+  border-radius: 8px;
+  background: #101a13;
+  color: #b9d7bc;
+  padding: 10px 12px;
+  margin-bottom: 14px;
   font-size: 13px;
 }
 
@@ -1972,8 +2050,25 @@ code {
   }
   .downloads-panel { align-items: stretch; flex-direction: column; }
   .download-lookup { grid-template-columns: 1fr; }
-  .page-head { height: auto; flex-wrap: wrap; }
-  .page-head code { margin-left: 0; width: 100%; }
+  .page-head {
+    height: auto;
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+  .page-title,
+  .page-tools {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .page-tools {
+    justify-content: flex-start;
+  }
+  .page-head code {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
 @media (max-width: 620px) {

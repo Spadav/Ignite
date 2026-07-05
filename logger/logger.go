@@ -69,6 +69,33 @@ func (l *Logger) Bundle() Bundle {
 	}
 }
 
+func (l *Logger) Clear() error {
+	l.mu.Lock()
+	l.entries = nil
+	l.mu.Unlock()
+
+	if err := truncateFile(filepath.Join(l.dir, "ignite.log")); err != nil {
+		return err
+	}
+	modelDir := filepath.Join(l.dir, "models")
+	entries, err := os.ReadDir(modelDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".log" {
+			continue
+		}
+		if err := truncateFile(filepath.Join(modelDir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (l *Logger) add(level, message string) {
 	entry := Entry{Time: time.Now(), Level: level, Message: message}
 	log.Printf("[%s] %s", level, message)
@@ -134,6 +161,17 @@ func appendLine(path, line string) {
 	}
 	defer file.Close()
 	_, _ = file.WriteString(line)
+}
+
+func truncateFile(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	return file.Close()
 }
 
 func readTail(path string, limit int) LogFile {

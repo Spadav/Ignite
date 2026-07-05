@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -37,10 +38,12 @@ type Handlers struct {
 	updateMu       sync.Mutex
 	updateCache    updateInfo
 	updateChecked  time.Time
+	engineUpdateMu sync.Mutex
+	engineUpdates  map[string]cachedEngineUpdate
 }
 
 func New(state *igniteruntime.State, manager *process.Manager, jobs *backend.JobManager, downloadManager *downloads.Manager, onboardingPath string, logs *logger.Logger) *Handlers {
-	return &Handlers{state: state, manager: manager, jobs: jobs, downloads: downloadManager, onboardingPath: onboardingPath, logs: logs, startedAt: time.Now()}
+	return &Handlers{state: state, manager: manager, jobs: jobs, downloads: downloadManager, onboardingPath: onboardingPath, logs: logs, startedAt: time.Now(), engineUpdates: map[string]cachedEngineUpdate{}}
 }
 
 func (h *Handlers) Status(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +193,7 @@ func (h *Handlers) Backends(w http.ResponseWriter, r *http.Request) {
 		plans[id] = backend.Plan(id, backendCfg, detected)
 		info := inspectEngine(backendCfg)
 		info.ID = id
+		h.attachEngineUpdate(id, backendCfg, &info)
 		engines[id] = info
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -626,12 +630,24 @@ func expandUserPath(path string) string {
 }
 
 type engineInfo struct {
-	ID      string `json:"id"`
-	Path    string `json:"path"`
-	Binary  string `json:"binary"`
-	Ready   bool   `json:"ready"`
-	Cloned  bool   `json:"cloned"`
-	GitHash string `json:"gitHash,omitempty"`
+	ID               string `json:"id"`
+	Path             string `json:"path"`
+	Binary           string `json:"binary"`
+	Ready            bool   `json:"ready"`
+	Cloned           bool   `json:"cloned"`
+	GitHash          string `json:"gitHash,omitempty"`
+	RemoteHash       string `json:"remoteHash,omitempty"`
+	UpdateChecked    bool   `json:"updateChecked"`
+	UpdateAvailable  bool   `json:"updateAvailable"`
+	UpdateError      string `json:"updateError,omitempty"`
+	BinaryModifiedAt string `json:"binaryModifiedAt,omitempty"`
+}
+
+type cachedEngineUpdate struct {
+	LocalHash  string
+	RemoteHash string
+	Error      string
+	CheckedAt  time.Time
 }
 
 func inspectEngine(backendCfg config.Backend) engineInfo {
@@ -647,8 +663,43 @@ func inspectEngine(backendCfg config.Backend) engineInfo {
 	}
 	if stat, err := os.Stat(binary); err == nil && !stat.IsDir() {
 		info.Ready = true
+		info.BinaryModifiedAt = stat.ModTime().Format(time.RFC3339)
 	}
 	return info
+}
+
+func (h *Handlers) attachEngineUpdate(id string, backendCfg config.Backend, info *engineInfo) {
+	if !info.Cloned {
+		return
+	}
+
+	h.engineUpdateMu.Lock()
+	cached, ok := h.engineUpdates[id]
+	if ok && cached.LocalHash == info.GitHash && time.Since(cached.CheckedAt) < 10*time.Minute {
+		h.engineUpdateMu.Unlock()
+		info.RemoteHash = cached.RemoteHash
+		info.UpdateError = cached.Error
+		info.UpdateChecked = cached.Error == "" && cached.RemoteHash != ""
+		info.UpdateAvailable = info.UpdateChecked && info.GitHash != "" && !strings.HasPrefix(info.RemoteHash, info.GitHash)
+		return
+	}
+	h.engineUpdateMu.Unlock()
+
+	remoteHash, errText := readRemoteGitHash(info.Path, backendCfg.Repo)
+
+	h.engineUpdateMu.Lock()
+	h.engineUpdates[id] = cachedEngineUpdate{
+		LocalHash:  info.GitHash,
+		RemoteHash: remoteHash,
+		Error:      errText,
+		CheckedAt:  time.Now(),
+	}
+	h.engineUpdateMu.Unlock()
+
+	info.RemoteHash = remoteHash
+	info.UpdateError = errText
+	info.UpdateChecked = errText == "" && remoteHash != ""
+	info.UpdateAvailable = info.UpdateChecked && info.GitHash != "" && !strings.HasPrefix(info.RemoteHash, info.GitHash)
 }
 
 func readGitHash(repoPath string) string {
@@ -670,6 +721,33 @@ func readGitHash(repoPath string) string {
 		return head[:12]
 	}
 	return head
+}
+
+func readRemoteGitHash(repoPath, repoURL string) (string, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	remote := repoURL
+	if remote == "" {
+		out, err := exec.CommandContext(ctx, "git", "-C", repoPath, "config", "--get", "remote.origin.url").Output()
+		if err != nil {
+			return "", "remote origin is not configured"
+		}
+		remote = strings.TrimSpace(string(out))
+	}
+	out, err := exec.CommandContext(ctx, "git", "ls-remote", remote, "HEAD").Output()
+	if err != nil {
+		return "", err.Error()
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return "", "remote HEAD was empty"
+	}
+	hash := fields[0]
+	if len(hash) > 12 {
+		hash = hash[:12]
+	}
+	return hash, ""
 }
 
 func safeJoin(root, relative string) (string, error) {
@@ -1022,6 +1100,18 @@ func (h *Handlers) UnloadAll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "unloaded"})
 }
 
+func (h *Handlers) StopRuntime(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	stopped, err := h.manager.StopRuntime(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "stopped", "stopped": stopped})
+}
+
 func (h *Handlers) Config(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.state.Config())
 }
@@ -1253,6 +1343,15 @@ func uniqueUnassigned(items []string, assigned map[string]bool) []string {
 
 func (h *Handlers) Logs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.logs.Bundle())
+}
+
+func (h *Handlers) ClearLogs(w http.ResponseWriter, r *http.Request) {
+	if err := h.logs.Clear(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	h.logs.Infof("logs cleared")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
