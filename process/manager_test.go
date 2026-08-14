@@ -28,3 +28,12 @@ func TestSwapUnloadCandidatesAreScopedToTargetGPU(t *testing.T) {
 		t.Fatalf("got %#v, want %#v", got, want)
 	}
 }
+
+func TestSameBackendExecutableAcceptsDeletedBinary(t *testing.T) {
+	binary := "/srv/ignite/llama-backends/llama.cpp/build-ignite/bin/llama-server"
+	exe := binary + " (deleted)"
+
+	if !sameBackendExecutable(exe, binary) {
+		t.Fatalf("expected rebuilt running binary to match configured backend")
+	}
+}

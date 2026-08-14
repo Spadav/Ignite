@@ -48,6 +48,13 @@ func main() {
 	}
 	state := igniteruntime.NewState(cfg)
 	manager := process.NewManager(state, logs)
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if stopped, err := manager.CleanupStaleRuntime(cleanupCtx); err != nil {
+		logs.Errorf("startup runtime cleanup failed: %v", err)
+	} else if stopped > 0 {
+		logs.Infof("startup stopped %d stale llama.cpp process(es)", stopped)
+	}
+	cleanupCancel()
 	backendJobs := backend.NewJobManager(state, logs)
 	downloadJobs := downloads.NewManager(filepath.Join(filepath.Dir(cfg.Path), "state", "downloads.json"), cfg.Downloads.Directory, logs)
 	proxy := router.New(state, manager, logs)

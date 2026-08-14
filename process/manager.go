@@ -94,6 +94,12 @@ func (m *Manager) EnsureLoaded(ctx context.Context, modelID string) (LoadedModel
 		return LoadedModel{}, fmt.Errorf("unknown model %q", modelID)
 	}
 
+	if stopped, err := m.CleanupStaleRuntime(ctx); err != nil {
+		return LoadedModel{}, err
+	} else if stopped > 0 {
+		m.logs.Infof("stopped %d stale llama.cpp process(es) before loading %s", stopped, modelID)
+	}
+
 	if err := m.unloadGroupMembers(ctx, cfg, modelID); err != nil {
 		return LoadedModel{}, err
 	}
@@ -250,7 +256,7 @@ func (m *Manager) StopRuntime(ctx context.Context) (int, error) {
 		return stopped, err
 	}
 
-	stale, err := m.stopStaleBackendProcesses(ctx)
+	stale, err := m.CleanupStaleRuntime(ctx)
 	if err != nil {
 		return stopped + stale, err
 	}
@@ -260,6 +266,10 @@ func (m *Manager) StopRuntime(ctx context.Context) (int, error) {
 		m.logs.Infof("runtime stopped %d llama.cpp process(es)", stopped+stale)
 	}
 	return stopped + stale, nil
+}
+
+func (m *Manager) CleanupStaleRuntime(ctx context.Context) (int, error) {
+	return m.stopStaleBackendProcesses(ctx)
 }
 
 func (m *Manager) unloadGroupMembers(ctx context.Context, cfg *config.Config, targetID string) error {
@@ -353,7 +363,7 @@ func matchesIgniteBackendProcess(pid int, binary, modelsPath string) bool {
 	if err == nil {
 		exe = exeAbs
 	}
-	if exe != binary {
+	if !sameBackendExecutable(exe, binary) {
 		return false
 	}
 
@@ -371,6 +381,11 @@ func matchesIgniteBackendProcess(pid int, binary, modelsPath string) bool {
 		}
 	}
 	return false
+}
+
+func sameBackendExecutable(exe, binary string) bool {
+	exe = strings.TrimSuffix(exe, " (deleted)")
+	return exe == binary || filepath.Base(exe) == filepath.Base(binary)
 }
 
 func isWithinPath(path, parent string) bool {
